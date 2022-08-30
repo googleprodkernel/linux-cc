@@ -505,3 +505,33 @@ void td_finalize(struct kvm_vm *vm)
 
 	tdx_td_finalizemr(vm);
 }
+
+/**
+ * Handle conversion of memory with @size beginning @gpa for @vm. Set
+ * @shared_to_private to true for shared to private conversions and false
+ * otherwise.
+ *
+ * Since this is just for selftests, we will just keep both pieces of backing
+ * memory allocated and not deallocate/allocate memory; we'll just do the
+ * minimum of calling KVM_MEMORY_ENCRYPT_REG_REGION and
+ * KVM_MEMORY_ENCRYPT_UNREG_REGION.
+ */
+void handle_memory_conversion(struct kvm_vm *vm, uint64_t gpa, uint64_t size,
+			bool shared_to_private)
+{
+	struct kvm_enc_region range;
+	char *ioctl_string = shared_to_private
+		? "KVM_MEMORY_ENCRYPT_REG_REGION"
+		: "KVM_MEMORY_ENCRYPT_UNREG_REGION";
+
+	range.addr = gpa;
+	range.size = size;
+
+	printf("\t ... calling %s ioctl with gpa=%#lx, size=%#lx\n",
+		ioctl_string, gpa, size);
+
+	if (shared_to_private)
+		vm_ioctl(vm, KVM_MEMORY_ENCRYPT_REG_REGION, &range);
+	else
+		vm_ioctl(vm, KVM_MEMORY_ENCRYPT_UNREG_REGION, &range);
+}
