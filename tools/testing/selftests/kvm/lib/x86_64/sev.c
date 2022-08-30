@@ -221,7 +221,7 @@ struct kvm_vm *vm_sev_create_with_one_vcpu(uint32_t policy, void *guest_code,
 	uint64_t nr_pages = vm_nr_pages_required(mode, 1, 0);
 	struct kvm_vm *vm;
 
-	vm = ____vm_create(mode, nr_pages);
+	vm = ____vm_create(mode, nr_pages, KVM_VM_TYPE_DEFAULT);
 
 	kvm_sev_ioctl(vm, KVM_SEV_INIT, NULL);
 
