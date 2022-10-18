@@ -9,6 +9,7 @@ struct kvm_vm_arch {
 	uint64_t pte_me_mask;
 	uint64_t c_bit;
 	uint64_t s_bit;
+	bool is_pt_protected;
 };
 
 #endif  // _TOOLS_LINUX_ASM_X86_KVM_HOST_H

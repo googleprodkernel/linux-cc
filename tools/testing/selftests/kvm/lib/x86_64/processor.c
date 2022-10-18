@@ -528,6 +528,10 @@ vm_paddr_t addr_arch_gva2gpa(struct kvm_vm *vm, vm_vaddr_t gva)
 	uint64_t *pml4e, *pdpe, *pde;
 	uint64_t *pte;
 
+	TEST_ASSERT(
+		!vm->arch.is_pt_protected,
+		"Protected guests have their page tables protected so gva2gpa conversions are not possible.");
+
 	TEST_ASSERT(vm->mode == VM_MODE_PXXV48_4K, "Attempt to use "
 		"unknown or unsupported guest mode, mode: 0x%x", vm->mode);
 
