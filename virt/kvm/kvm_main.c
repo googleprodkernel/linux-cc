@@ -1178,11 +1178,11 @@ int kvm_vm_set_mem_attr(struct kvm *kvm, int attr, gfn_t start, gfn_t end)
 	end = gfn;
 	for (i = 0; i < KVM_ADDRESS_SPACE_NUM; i++) {
 		struct kvm_memslot_iter iter;
-		struct kvm_memory_slot *slot;
 		struct kvm_memslots *slots;
 
 		slots = __kvm_memslots(kvm, i);
 		kvm_for_each_memslot_in_gfn_range(&iter, slots, start, end) {
+			struct kvm_memory_slot *slot = iter.slot;
 			gfn_t s = max(start, slot->base_gfn);
 			gfn_t e = min(end, slot->base_gfn + slot->npages);
 

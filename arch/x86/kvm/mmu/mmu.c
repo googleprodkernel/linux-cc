@@ -1578,7 +1578,7 @@ bool kvm_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range)
 		flush = kvm_handle_gfn_range(kvm, range, kvm_zap_rmap);
 
 	if (is_tdp_mmu_enabled(kvm)) {
-		bool zap_private;
+		bool zap_private = false;
 
 		if (kvm_slot_can_be_private(range->slot)) {
 			if (range->flags & KVM_GFN_RANGE_FLAGS_RESTRICTED_MEM)

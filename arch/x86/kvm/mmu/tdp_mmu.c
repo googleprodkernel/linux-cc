@@ -563,7 +563,7 @@ static int __must_check handle_changed_private_spte(struct kvm *kvm, gfn_t gfn,
 	bool is_leaf = is_present && is_last_spte(new_spte, level);
 	kvm_pfn_t old_pfn = spte_to_pfn(old_spte);
 	kvm_pfn_t new_pfn = spte_to_pfn(new_spte);
-	int ret;
+	int ret = 0;
 
 	lockdep_assert_held(&kvm->mmu_lock);
 	if (is_present) {
