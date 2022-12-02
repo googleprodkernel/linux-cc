@@ -57,5 +57,6 @@
 # define __ARCH_WANT_SYS_VFORK
 # define __ARCH_WANT_SYS_CLONE
 # define __ARCH_WANT_SYS_CLONE3
+# define __ARCH_WANT_MEMFD_RESTRICTED
 
 #endif /* _ASM_X86_UNISTD_H */
