@@ -1143,6 +1143,9 @@ static struct kvm *kvm_create_vm(unsigned long type, const char *fdname)
 	rcuwait_init(&kvm->mn_memslots_update_rcuwait);
 	xa_init(&kvm->vcpu_array);
 
+	if (IS_ENABLED(CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES))
+		xa_init(&kvm->mem_attr_array);
+
 	INIT_LIST_HEAD(&kvm->gpc_list);
 	spin_lock_init(&kvm->gpc_lock);
 
@@ -1313,6 +1316,10 @@ static void kvm_destroy_vm(struct kvm *kvm)
 		kvm_free_memslots(kvm, &kvm->__memslots[i][0]);
 		kvm_free_memslots(kvm, &kvm->__memslots[i][1]);
 	}
+
+	if (IS_ENABLED(CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES))
+		xa_destroy(&kvm->mem_attr_array);
+
 	cleanup_srcu_struct(&kvm->irq_srcu);
 	cleanup_srcu_struct(&kvm->srcu);
 	kvm_arch_free_vm(kvm);
@@ -2312,6 +2319,51 @@ static int kvm_vm_ioctl_clear_dirty_log(struct kvm *kvm,
 	return r;
 }
 #endif /* CONFIG_KVM_GENERIC_DIRTYLOG_READ_PROTECT */
+
+#ifdef CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES
+static u64 kvm_get_supported_mem_attributes(struct kvm *kvm)
+{
+	return 0;
+}
+
+static int kvm_vm_ioctl_set_mem_attributes(struct kvm *kvm,
+					   struct kvm_memory_attributes *attrs)
+{
+	gfn_t start, end;
+	unsigned long i;
+	void *entry;
+
+	/* flags is reserved for future extention and currently is not used. */
+	if (attrs->flags)
+		return -ENXIO;
+	if (attrs->attributes & ~kvm_get_supported_mem_attributes(kvm))
+		return -EOPNOTSUPP;
+	if (!attrs->size)
+		return -EINVAL;
+	if (attrs->address + attrs->size < attrs->address)
+		return -E2BIG;
+	if (!PAGE_ALIGNED(attrs->address) || !PAGE_ALIGNED(attrs->size))
+		return -EINVAL;
+
+	start = gpa_to_gfn(attrs->address);
+	end = gpa_to_gfn(attrs->address + attrs->size);
+
+	entry = attrs->attributes ? xa_mk_value(attrs->attributes) : NULL;
+
+	mutex_lock(&kvm->slots_lock);
+	for (i = start; i < end; i++) {
+		if (xa_err(xa_store(&kvm->mem_attr_array, i, entry,
+				    GFP_KERNEL_ACCOUNT)))
+			break;
+	}
+	mutex_unlock(&kvm->slots_lock);
+
+	attrs->address = gfn_to_gpa(i);
+	attrs->size = (end - i) << PAGE_SHIFT;
+
+	return 0;
+}
+#endif /* CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES */
 
 struct kvm_memory_slot *gfn_to_memslot(struct kvm *kvm, gfn_t gfn)
 {
@@ -4477,6 +4529,9 @@ static int kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg)
 #ifdef CONFIG_HAVE_KVM_MSI
 	case KVM_CAP_SIGNAL_MSI:
 #endif
+#ifdef CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES
+	case KVM_CAP_MEMORY_ATTRIBUTES:
+#endif
 #ifdef CONFIG_HAVE_KVM_IRQFD
 	case KVM_CAP_IRQFD:
 	case KVM_CAP_IRQFD_RESAMPLE:
@@ -4872,6 +4927,30 @@ static long kvm_vm_ioctl(struct file *filp,
 		break;
 	}
 #endif /* CONFIG_HAVE_KVM_IRQ_ROUTING */
+#ifdef CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES
+	case KVM_GET_SUPPORTED_MEMORY_ATTRIBUTES: {
+		u64 attrs = kvm_get_supported_mem_attributes(kvm);
+
+		r = -EFAULT;
+		if (copy_to_user(argp, &attrs, sizeof(attrs)))
+			goto out;
+		r = 0;
+		break;
+	}
+	case KVM_SET_MEMORY_ATTRIBUTES: {
+		struct kvm_memory_attributes attrs;
+
+		r = -EFAULT;
+		if (copy_from_user(&attrs, argp, sizeof(attrs)))
+			goto out;
+
+		r = kvm_vm_ioctl_set_mem_attributes(kvm, &attrs);
+
+		if (!r && copy_to_user(argp, &attrs, sizeof(attrs)))
+			r = -EFAULT;
+		break;
+	}
+#endif /* CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES */
 	case KVM_CREATE_DEVICE: {
 		struct kvm_create_device cd;
 
