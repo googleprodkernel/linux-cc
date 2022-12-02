@@ -44,6 +44,10 @@ cat << EOF
 #define __IGNORE_memfd_secret
 #endif
 
+#ifndef __ARCH_WANT_MEMFD_RESTRICTED
+#define __IGNORE_memfd_restricted
+#endif
+
 /* Missing flags argument */
 #define __IGNORE_renameat	/* renameat2 */
 
