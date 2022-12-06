@@ -94,6 +94,7 @@ enum vm_mem_backing_src_type {
 	VM_MEM_SRC_ANONYMOUS_HUGETLB_1GB,
 	VM_MEM_SRC_ANONYMOUS_HUGETLB_2GB,
 	VM_MEM_SRC_ANONYMOUS_HUGETLB_16GB,
+	VM_MEM_SRC_ANONYMOUS_AND_RESTRICTED_MEMFD,
 	VM_MEM_SRC_SHMEM,
 	VM_MEM_SRC_SHARED_HUGETLB,
 	NUM_SRC_TYPES,
@@ -104,6 +105,7 @@ enum vm_mem_backing_src_type {
 struct vm_mem_backing_src_alias {
 	const char *name;
 	uint32_t flag;
+	bool need_restricted_memfd;
 };
 
 #define MIN_RUN_DELAY_NS	200000UL

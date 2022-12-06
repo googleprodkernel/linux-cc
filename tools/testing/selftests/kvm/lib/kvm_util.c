@@ -15,7 +15,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <linux/kernel.h>
 
 #define KVM_UTIL_MIN_PFN	2
 
@@ -799,6 +798,27 @@ void vm_set_user_memory_region(struct kvm_vm *vm, uint32_t slot, uint32_t flags,
 		    errno, strerror(errno));
 }
 
+/**
+ * Initialize memory in restricted_fd with size @memory_region_size and return
+ * the fd.
+ *
+ * Errors out if there's any error
+ */
+static int initialize_restricted_memfd(uint64_t memory_region_size)
+{
+	int ret;
+	int mfd = -1;
+
+	mfd = syscall(__NR_memfd_restricted, 0);
+	TEST_ASSERT(mfd != -1, "Failed to create private memfd");
+	ret = ftruncate(mfd, memory_region_size);
+	TEST_ASSERT(ret != -1, "Failed to resize memfd %d to %lx", mfd, memory_region_size);
+	ret = fallocate(mfd, 0, 0, memory_region_size);
+	TEST_ASSERT(ret != -1, "Failed to allocate %lx bytes in memfd %d", memory_region_size, mfd);
+
+	return mfd;
+}
+
 /*
  * VM Userspace Memory Region Add
  *
@@ -830,6 +850,7 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 	struct userspace_mem_region *region;
 	size_t backing_src_pagesz = get_backing_src_pagesz(src_type);
 	size_t alignment;
+	int restricted_memfd = -1;
 
 	TEST_ASSERT(vm_adjust_num_guest_pages(vm->mode, npages) == npages,
 		"Number of guest pages is not compatible with the host. "
@@ -927,12 +948,22 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 
 	/* As needed perform madvise */
 	if ((src_type == VM_MEM_SRC_ANONYMOUS ||
-	     src_type == VM_MEM_SRC_ANONYMOUS_THP) && thp_configured()) {
-		ret = madvise(region->host_mem, npages * vm->page_size,
-			      src_type == VM_MEM_SRC_ANONYMOUS ? MADV_NOHUGEPAGE : MADV_HUGEPAGE);
+	     src_type == VM_MEM_SRC_ANONYMOUS_THP ||
+	     src_type == VM_MEM_SRC_ANONYMOUS_AND_RESTRICTED_MEMFD) && thp_configured()) {
+		int advice = src_type == VM_MEM_SRC_ANONYMOUS_THP
+			? MADV_HUGEPAGE
+			: MADV_NOHUGEPAGE;
+		ret = madvise(region->host_mem, npages * vm->page_size, advice);
 		TEST_ASSERT(ret == 0, "madvise failed, addr: %p length: 0x%lx src_type: %s",
 			    region->host_mem, npages * vm->page_size,
 			    vm_mem_backing_src_alias(src_type)->name);
+	}
+
+	if (vm_mem_backing_src_alias(src_type)->need_restricted_memfd) {
+		restricted_memfd = initialize_restricted_memfd(npages * vm->page_size);
+		TEST_ASSERT(restricted_memfd != -1,
+			    "Failed to create restricted memfd");
+		flags |= KVM_MEM_PRIVATE;
 	}
 
 	region->unused_phy_pages = sparsebit_alloc();
@@ -944,13 +975,16 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 	region->region.guest_phys_addr = guest_paddr;
 	region->region.memory_size = npages * vm->page_size;
 	region->region.userspace_addr = (uintptr_t) region->host_mem;
-	ret = __vm_ioctl(vm, KVM_SET_USER_MEMORY_REGION, &region->region);
+	region->region_ext.restricted_fd = restricted_memfd;
+	region->region_ext.restricted_offset = 0;
+	ret = __vm_ioctl(vm, KVM_SET_USER_MEMORY_REGION, &region->region_ext);
 	TEST_ASSERT(ret == 0, "KVM_SET_USER_MEMORY_REGION IOCTL failed,\n"
 		"  rc: %i errno: %i\n"
 		"  slot: %u flags: 0x%x\n"
-		"  guest_phys_addr: 0x%lx size: 0x%lx",
+		"  guest_phys_addr: 0x%lx size: 0x%lx restricted_fd: %d",
 		ret, errno, slot, flags,
-		guest_paddr, (uint64_t) region->region.memory_size);
+		    guest_paddr, (uint64_t) region->region.memory_size,
+		    restricted_memfd);
 
 	/* Add to quick lookup data structures */
 	vm_userspace_mem_region_gpa_insert(&vm->regions.gpa_tree, region);
