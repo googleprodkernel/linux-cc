@@ -405,6 +405,7 @@ void tdx_vm_free(struct kvm *kvm)
 		for (i = 0; i < tdx_caps.tdcs_nr_pages; i++)
 			tdx_reclaim_td_page(&kvm_tdx->tdcs[i]);
 		kfree(kvm_tdx->tdcs);
+		kvm_tdx->tdcs = NULL;
 	}
 
 	/*
@@ -418,6 +419,9 @@ void tdx_vm_free(struct kvm *kvm)
 		return;
 
 	free_page(kvm_tdx->tdr.va);
+	kvm_tdx->tdr.added = false;
+	kvm_tdx->tdr.va = 0;
+	kvm_tdx->tdr.pa = 0;
 }
 
 static int tdx_do_tdh_mng_key_config(void *param)
