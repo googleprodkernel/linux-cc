@@ -67,6 +67,7 @@
 /x86_64/triple_fault_event_test
 /x86_64/tdx_vm_tests
 /x86_64/tdx_shared_mem_test
+/x86_64/tdx_upm_test
 /access_tracking_perf_test
 /demand_paging_test
 /dirty_log_test
