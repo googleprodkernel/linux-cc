@@ -17,6 +17,8 @@
 #include "linux/rbtree.h"
 
 #include <asm/atomic.h>
+#include <asm/kvm.h>
+#include <asm/kvm_host.h>
 
 #include <sys/ioctl.h>
 
@@ -111,6 +113,9 @@ struct kvm_vm {
 	vm_vaddr_t idt;
 	vm_vaddr_t handlers;
 	uint32_t dirty_ring_size;
+	uint64_t gpa_protected_mask;
+
+	struct kvm_vm_arch arch;
 
 	/* VM protection enabled: SEV, etc*/
 	bool protected;
@@ -162,6 +167,7 @@ enum vm_guest_mode {
 	VM_MODE_P40V48_16K,
 	VM_MODE_P40V48_64K,
 	VM_MODE_PXXV48_4K,	/* For 48bits VA but ANY bits PA */
+	VM_MODE_PXXV48_4K_SEV,	/* For 48bits VA but ANY bits PA */
 	VM_MODE_P47V64_4K,
 	VM_MODE_P44V64_4K,
 	VM_MODE_P36V48_4K,
@@ -518,6 +524,17 @@ void *addr_gpa2hva(struct kvm_vm *vm, vm_paddr_t gpa);
 void *addr_gva2hva(struct kvm_vm *vm, vm_vaddr_t gva);
 vm_paddr_t addr_hva2gpa(struct kvm_vm *vm, void *hva);
 void *addr_gpa2alias(struct kvm_vm *vm, vm_paddr_t gpa);
+
+
+static inline vm_paddr_t vm_untag_gpa(struct kvm_vm *vm, vm_paddr_t gpa)
+{
+	return gpa & ~vm->gpa_protected_mask;
+}
+
+static inline vm_paddr_t vm_tag_gpa(struct kvm_vm *vm, vm_paddr_t gpa)
+{
+	return gpa | vm->gpa_protected_mask;
+}
 
 void vcpu_run(struct kvm_vcpu *vcpu);
 int _vcpu_run(struct kvm_vcpu *vcpu);
@@ -1017,5 +1034,7 @@ static inline int __vm_disable_nx_huge_pages(struct kvm_vm *vm)
 void kvm_selftest_arch_init(void);
 
 void kvm_arch_vm_post_create(struct kvm_vm *vm);
+
+bool vm_is_gpa_protected(struct kvm_vm *vm, vm_paddr_t paddr);
 
 #endif /* SELFTEST_KVM_UTIL_BASE_H */
