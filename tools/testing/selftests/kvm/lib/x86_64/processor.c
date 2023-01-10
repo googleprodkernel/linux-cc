@@ -9,6 +9,7 @@
 #include "test_util.h"
 #include "kvm_util.h"
 #include "processor.h"
+#include "sev.h"
 
 #ifndef NUM_INTERRUPTS
 #define NUM_INTERRUPTS 256
@@ -122,10 +123,16 @@ bool kvm_is_tdp_enabled(void)
 		return get_kvm_amd_param_bool("npt");
 }
 
+static void assert_supported_guest_mode(struct kvm_vm *vm)
+{
+	TEST_ASSERT(vm->mode == VM_MODE_PXXV48_4K || vm->mode == VM_MODE_PXXV48_4K_SEV,
+		    "Attempt to use unknown or unsupported guest mode, mode: 0x%x",
+		    vm->mode);
+}
+
 void virt_arch_pgd_alloc(struct kvm_vm *vm)
 {
-	TEST_ASSERT(vm->mode == VM_MODE_PXXV48_4K, "Attempt to use "
-		"unknown or unsupported guest mode, mode: 0x%x", vm->mode);
+	assert_supported_guest_mode(vm);
 
 	/* If needed, create page map l4 table. */
 	if (!vm->pgd_created) {
@@ -189,8 +196,7 @@ void __virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr, int level)
 	uint64_t *pml4e, *pdpe, *pde;
 	uint64_t *pte;
 
-	TEST_ASSERT(vm->mode == VM_MODE_PXXV48_4K,
-		    "Unknown or unsupported guest mode, mode: 0x%x", vm->mode);
+	assert_supported_guest_mode(vm);
 
 	TEST_ASSERT((vaddr % pg_size) == 0,
 		    "Virtual address not aligned,\n"
@@ -276,11 +282,14 @@ uint64_t *__vm_get_page_table_entry(struct kvm_vm *vm, uint64_t vaddr,
 {
 	uint64_t *pml4e, *pdpe, *pde;
 
+	TEST_ASSERT(
+		!vm->arch.is_pt_protected,
+		"Protected guests have their page tables protected so gva2gpa conversions are not possible.");
+
 	TEST_ASSERT(*level >= PG_LEVEL_NONE && *level < PG_LEVEL_NUM,
 		    "Invalid PG_LEVEL_* '%d'", *level);
 
-	TEST_ASSERT(vm->mode == VM_MODE_PXXV48_4K, "Attempt to use "
-		"unknown or unsupported guest mode, mode: 0x%x", vm->mode);
+	assert_supported_guest_mode(vm);
 	TEST_ASSERT(sparsebit_is_set(vm->vpages_valid,
 		(vaddr >> vm->page_shift)),
 		"Invalid virtual address, vaddr: 0x%lx",
@@ -546,6 +555,7 @@ static void vcpu_setup(struct kvm_vm *vm, struct kvm_vcpu *vcpu)
 	kvm_setup_gdt(vm, &sregs.gdt);
 
 	switch (vm->mode) {
+	case VM_MODE_PXXV48_4K_SEV:
 	case VM_MODE_PXXV48_4K:
 		sregs.cr0 = X86_CR0_PE | X86_CR0_NE | X86_CR0_PG;
 		sregs.cr4 |= X86_CR4_PAE | X86_CR4_OSFXSR;
@@ -569,6 +579,10 @@ static void vcpu_setup(struct kvm_vm *vm, struct kvm_vcpu *vcpu)
 void kvm_arch_vm_post_create(struct kvm_vm *vm)
 {
 	vm_create_irqchip(vm);
+
+	if (vm->mode == VM_MODE_PXXV48_4K_SEV)
+		sev_vm_init(vm);
+
 	sync_global_to_guest(vm, host_cpu_is_intel);
 	sync_global_to_guest(vm, host_cpu_is_amd);
 }
@@ -1049,6 +1063,25 @@ void kvm_get_cpu_address_width(unsigned int *pa_bits, unsigned int *va_bits)
 	} else {
 		*pa_bits = kvm_cpu_property(X86_PROPERTY_MAX_PHY_ADDR);
 		*va_bits = kvm_cpu_property(X86_PROPERTY_MAX_VIRT_ADDR);
+	}
+}
+
+static void configure_sev_pte_masks(struct kvm_vm *vm)
+{
+	uint32_t eax, ebx, ecx, edx, enc_bit;
+
+	cpuid(CPUID_MEM_ENC_LEAF, &eax, &ebx, &ecx, &edx);
+	enc_bit = ebx & CPUID_EBX_CBIT_MASK;
+
+	vm->arch.c_bit = 1ULL << enc_bit;
+	vm->protected = true;
+	vm->gpa_protected_mask = vm->arch.c_bit;
+}
+
+void kvm_init_vm_address_properties(struct kvm_vm *vm)
+{
+	if (vm->mode == VM_MODE_PXXV48_4K_SEV) {
+		configure_sev_pte_masks(vm);
 	}
 }
 

@@ -90,6 +90,13 @@ enum kvm_mem_region_type {
 	NR_MEM_REGIONS,
 };
 
+/* VM protection policy/configuration. */
+struct protected_vm {
+	bool enabled;
+	bool has_protected_bit;
+	int8_t protected_bit;
+};
+
 struct kvm_vm {
 	int mode;
 	unsigned long type;
@@ -832,6 +839,10 @@ static inline vm_paddr_t vm_phy_pages_alloc(struct kvm_vm *vm, size_t num,
 	return _vm_phy_pages_alloc(vm, num, paddr_min, memslot, vm->protected);
 }
 
+uint64_t vm_nr_pages_required(enum vm_guest_mode mode,
+			      uint32_t nr_runnable_vcpus,
+			      uint64_t extra_mem_pages);
+
 /*
  * ____vm_create() does KVM_CREATE_VM and little else.  __vm_create() also
  * loads the test binary into guest memory and creates an IRQ chip (x86 only).
@@ -916,8 +927,8 @@ unsigned long vm_compute_max_gfn(struct kvm_vm *vm);
 unsigned int vm_calc_num_guest_pages(enum vm_guest_mode mode, size_t size);
 unsigned int vm_num_host_pages(enum vm_guest_mode mode, unsigned int num_guest_pages);
 unsigned int vm_num_guest_pages(enum vm_guest_mode mode, unsigned int num_host_pages);
-static inline unsigned int
-vm_adjust_num_guest_pages(enum vm_guest_mode mode, unsigned int num_guest_pages)
+static inline unsigned int vm_adjust_num_guest_pages(enum vm_guest_mode mode,
+						     unsigned int num_guest_pages)
 {
 	unsigned int n;
 	n = vm_num_guest_pages(mode, vm_num_host_pages(mode, num_guest_pages));
