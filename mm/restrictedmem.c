@@ -84,7 +84,7 @@ static int restrictedmem_getattr(struct user_namespace *mnt_userns,
 	struct restrictedmem *rm = inode->i_mapping->private_data;
 	struct file *memfd = rm->memfd;
 
-	return memfd->f_inode->i_op->getattr(mnt_userns, path, stat,
+	return memfd->f_inode->i_op->getattr(mnt_userns, &memfd->f_path, stat,
 					     request_mask, query_flags);
 }
 
