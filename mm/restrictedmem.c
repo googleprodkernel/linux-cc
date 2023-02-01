@@ -6,6 +6,7 @@
 #include <linux/syscalls.h>
 #include <uapi/linux/falloc.h>
 #include <uapi/linux/magic.h>
+#include <uapi/linux/restrictedmem.h>
 #include <linux/restrictedmem.h>
 
 struct restrictedmem {
@@ -250,19 +251,20 @@ static struct address_space_operations restricted_aops = {
 #endif
 };
 
-SYSCALL_DEFINE1(memfd_restricted, unsigned int, flags)
+static int restrictedmem_create(struct vfsmount *mount)
 {
 	struct file *file, *restricted_file;
 	int fd, err;
-
-	if (flags)
-		return -EINVAL;
 
 	fd = get_unused_fd_flags(0);
 	if (fd < 0)
 		return fd;
 
-	file = shmem_file_setup("memfd:restrictedmem", 0, VM_NORESERVE);
+	if (mount)
+		file = shmem_file_setup_with_mnt(mount, "memfd:restrictedmem", 0, VM_NORESERVE);
+	else
+		file = shmem_file_setup("memfd:restrictedmem", 0, VM_NORESERVE);
+
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
 		goto err_fd;
@@ -284,6 +286,67 @@ SYSCALL_DEFINE1(memfd_restricted, unsigned int, flags)
 err_fd:
 	put_unused_fd(fd);
 	return err;
+}
+
+static struct vfsmount *restrictedmem_get_user_mount(struct file *file)
+{
+	int ret;
+	struct vfsmount *mnt;
+	struct path *path;
+
+	path = &file->f_path;
+	if (path->dentry != path->mnt->mnt_root)
+		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Disallow bind-mounts that aren't bind-mounts of the whole
+	 * filesystem
+	 */
+	mnt = path->mnt;
+	if (mnt->mnt_root != mnt->mnt_sb->s_root)
+		return ERR_PTR(-EINVAL);
+
+	if (mnt->mnt_sb->s_magic != TMPFS_MAGIC)
+		return ERR_PTR(-EINVAL);
+
+	ret = mnt_want_write(mnt);
+	if (ret)
+		return ERR_PTR(ret);
+
+	return mnt;
+}
+
+SYSCALL_DEFINE2(memfd_restricted, unsigned int, flags, int, mount_fd)
+{
+	int ret;
+	struct fd f = {};
+	struct vfsmount *mnt = NULL;
+
+	if (flags & ~MEMFD_RSTD_USERMNT)
+		return -EINVAL;
+
+	if (flags & MEMFD_RSTD_USERMNT) {
+		f = fdget_raw(mount_fd);
+		if (!f.file)
+			return -EBADF;
+
+		mnt = restrictedmem_get_user_mount(f.file);
+		if (IS_ERR(mnt)) {
+			ret = PTR_ERR(mnt);
+			goto out;
+		}
+	}
+
+	ret = restrictedmem_create(mnt);
+
+	if (mnt)
+		mnt_drop_write(mnt);
+
+out:
+	if (f.file)
+		fdput(f);
+
+	return ret;
 }
 
 int restrictedmem_bind(struct file *file, pgoff_t start, pgoff_t end,
