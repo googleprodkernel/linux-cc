@@ -60,6 +60,7 @@ TARGETS += pstore
 TARGETS += ptrace
 TARGETS += openat2
 TARGETS += resctrl
+TARGETS += restrictedmem
 TARGETS += rlimits
 TARGETS += rseq
 TARGETS += rtc
