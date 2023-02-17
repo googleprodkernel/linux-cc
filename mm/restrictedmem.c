@@ -190,19 +190,25 @@ static struct file *restrictedmem_file_create(struct file *memfd)
 	return file;
 }
 
-static int restrictedmem_create(struct vfsmount *mount)
+static int restrictedmem_create(unsigned int flags, struct vfsmount *mount)
 {
 	struct file *file, *restricted_file;
 	int fd, err;
+	unsigned long shmem_setup_flags = VM_NORESERVE;
 
 	fd = get_unused_fd_flags(0);
 	if (fd < 0)
 		return fd;
 
-	if (mount)
-		file = shmem_file_setup_with_mnt(mount, "memfd:restrictedmem", 0, VM_NORESERVE);
-	else
-		file = shmem_file_setup("memfd:restrictedmem", 0, VM_NORESERVE);
+	if (flags & RMFD_HUGEPAGE)
+		shmem_setup_flags |= VM_HUGEPAGE;
+
+	if (mount) {
+		file = shmem_file_setup_with_mnt(mount, "memfd:restrictedmem",
+						 0, shmem_setup_flags);
+	} else {
+		file = shmem_file_setup("memfd:restrictedmem", 0, shmem_setup_flags);
+	}
 
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
@@ -230,7 +236,8 @@ static bool is_shmem_mount(struct vfsmount *mnt)
 	return mnt->mnt_sb->s_magic == TMPFS_MAGIC;
 }
 
-static int restrictedmem_create_from_path(const char __user *mount_path)
+static int restrictedmem_create_from_path(unsigned int flags,
+					  const char __user *mount_path)
 {
 	int ret;
 	struct path path;
@@ -250,7 +257,7 @@ static int restrictedmem_create_from_path(const char __user *mount_path)
 	if (unlikely(ret))
 		goto out;
 
-	ret = restrictedmem_create(path.mnt);
+	ret = restrictedmem_create(flags, path.mnt);
 
 	mnt_drop_write(path.mnt);
 out:
@@ -261,16 +268,16 @@ out:
 
 SYSCALL_DEFINE2(memfd_restricted, unsigned int, flags, const char __user *, mount_path)
 {
-	if (flags & ~RMFD_TMPFILE)
+	if (flags & ~(RMFD_TMPFILE | RMFD_HUGEPAGE))
 		return -EINVAL;
 
 	if (flags == RMFD_TMPFILE) {
 		if (!mount_path)
 			return -EINVAL;
 
-		return restrictedmem_create_from_path(mount_path);
+		return restrictedmem_create_from_path(flags, mount_path);
 	} else {
-		return restrictedmem_create(NULL);
+		return restrictedmem_create(flags, NULL);
 	}
 }
 
