@@ -38,6 +38,8 @@ separated by spaces:
 	hmm smoke tests
 - madv_populate
 	test memadvise(2) MADV_POPULATE_{READ,WRITE} options
+- memfd_restricted_
+	test memfd_restricted(2)
 - memfd_secret
 	test memfd_secret(2)
 - process_mrelease
@@ -235,6 +237,8 @@ CATEGORY="hmm" run_test ./test_hmm.sh smoke
 
 # MADV_POPULATE_READ and MADV_POPULATE_WRITE tests
 CATEGORY="madv_populate" run_test ./madv_populate
+
+CATEGORY="memfd_restricted" run_test ./memfd_restricted
 
 CATEGORY="memfd_secret" run_test ./memfd_secret
 
