@@ -45,6 +45,7 @@ TEST_GEN_PROGS = madv_populate
 TEST_GEN_FILES += map_fixed_noreplace
 TEST_GEN_FILES += map_hugetlb
 TEST_GEN_FILES += map_populate
+TEST_GEN_FILES += memfd_restricted
 TEST_GEN_FILES += memfd_secret
 TEST_GEN_FILES += migration
 TEST_GEN_FILES += mlock-random-test
