@@ -1098,6 +1098,38 @@ void vm_mem_region_move(struct kvm_vm *vm, uint32_t slot, uint64_t new_gpa)
 		    ret, errno, slot, new_gpa);
 }
 
+void vm_migrate_mem_regions(struct kvm_vm *dst_vm, struct kvm_vm *src_vm)
+{
+	int bkt;
+	struct hlist_node *node;
+	struct userspace_mem_region *region;
+	int ret;
+
+	hash_for_each_safe(src_vm->regions.slot_hash, bkt, node, region, slot_node) {
+		ret = __vm_ioctl(dst_vm, KVM_SET_USER_MEMORY_REGION, &region->region);
+		TEST_ASSERT(ret == 0, "KVM_SET_USER_MEMORY_REGION IOCTL failed,\n"
+			"  rc: %i errno: %i\n"
+			"  slot: %u flags: 0x%x\n"
+			"  guest_phys_addr: 0x%llx size: 0x%lx",
+			ret, errno, region->region.slot, region->region.flags,
+			region->region.guest_phys_addr, (uint64_t) region->region.memory_size);
+
+		/* Remove the region from the src and add it to the  dst regions list */
+		rb_erase(&region->gpa_node, &src_vm->regions.gpa_tree);
+		rb_erase(&region->hva_node, &src_vm->regions.hva_tree);
+		// TODO: Is it safe to remove from hash while we iterate over it?
+		// Looks like the 'safe' version of hash_for_each should support this usecase.
+		hash_del(&region->slot_node);
+
+		vm_userspace_mem_region_gpa_insert(&dst_vm->regions.gpa_tree, region);
+		vm_userspace_mem_region_hva_insert(&dst_vm->regions.hva_tree, region);
+		hash_add(dst_vm->regions.slot_hash, &region->slot_node, region->region.slot);
+
+		// Don't remove the region from the src VM using ioctl, we are going to migrate
+		// this VM.
+	}
+}
+
 /*
  * VM Memory Region Delete
  *

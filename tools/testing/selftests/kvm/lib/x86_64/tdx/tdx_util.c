@@ -495,15 +495,19 @@ static void td_setup_boot_parameters(struct kvm_vm *vm, enum vm_mem_backing_src_
 	ASSERT_EQ(addr, TD_BOOT_PARAMETERS_GPA);
 }
 
+void td_configure(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
+		   uint64_t attributes)
+{
+	tdx_enable_capabilities(vm);
+	tdx_configure_memory_encryption(vm);
+}
+
 void td_initialize(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
 		   uint64_t attributes)
 {
 	uint64_t nr_pages_required;
 
-	tdx_enable_capabilities(vm);
-
-	tdx_configure_memory_encryption(vm);
-
+	td_configure(vm, src_type, attributes);
 	tdx_td_init(vm, attributes);
 
 	nr_pages_required = vm_nr_pages_required(VM_MODE_DEFAULT, 1, 0);

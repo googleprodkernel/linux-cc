@@ -700,6 +700,17 @@ struct kvm_vcpu *vm_arch_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id,
 	return vcpu;
 }
 
+struct kvm_vcpu *vm_arch_vcpu_add_for_migration(struct kvm_vm *vm,
+						uint32_t vcpu_id)
+{
+	struct kvm_vcpu *vcpu;
+
+	vcpu = __vm_vcpu_add(vm, vcpu_id);
+	vcpu_init_cpuid(vcpu, kvm_get_supported_cpuid());
+
+	return vcpu;
+}
+
 struct kvm_vcpu *vm_arch_vcpu_recreate(struct kvm_vm *vm, uint32_t vcpu_id)
 {
 	struct kvm_vcpu *vcpu = __vm_vcpu_add(vm, vcpu_id);
