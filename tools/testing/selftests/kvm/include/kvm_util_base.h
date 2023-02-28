@@ -19,6 +19,7 @@
 #include <asm/atomic.h>
 
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 
 #include "sparsebit.h"
 
@@ -375,6 +376,15 @@ int kvm_memcmp_hva_gva(void *hva, struct kvm_vm *vm, const vm_vaddr_t gva,
 		       size_t len);
 void kvm_vm_elf_load(struct kvm_vm *vm, const char *filename);
 int kvm_memfd_alloc(size_t size, bool hugepages);
+
+static inline int memfd_restricted(unsigned int flags)
+{
+#ifdef __NR_memfd_restricted
+	return syscall(__NR_memfd_restricted, flags);
+#else
+	return -1;
+#endif
+}
 
 void vm_dump(FILE *stream, struct kvm_vm *vm, uint8_t indent);
 

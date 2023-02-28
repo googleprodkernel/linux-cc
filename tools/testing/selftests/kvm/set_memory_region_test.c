@@ -30,6 +30,7 @@
  */
 #define MEM_REGION_GPA		0xc0000000
 #define MEM_REGION_SLOT		10
+#define UNALIGNED_OFFSET	1
 
 static const uint64_t MMIO_VAL = 0xbeefull;
 
@@ -386,6 +387,71 @@ static void test_add_max_memory_regions(void)
 	kvm_vm_free(vm);
 }
 
+static bool set_private_region_failed(struct kvm_vm *vm, void *hva,
+				      uint32_t rdm_fd, uint64_t rdm_ofs)
+{
+	int ret;
+
+	ret = __vm_set_user_memory_region2(vm, MEM_REGION_SLOT, KVM_MEM_PRIVATE,
+					   MEM_REGION_GPA, MEM_REGION_SIZE,
+					   hva, rdm_fd, rdm_ofs);
+	return ret == -1 && errno == EINVAL;
+}
+
+static void test_private_regions(void)
+{
+	int ret;
+	struct kvm_vm *vm;
+	void *mem;
+	int fd;
+
+	const struct vm_shape shape = {
+		.mode = VM_MODE_DEFAULT,
+		.type = KVM_X86_PROTECTED_VM,
+	};
+
+	TEST_REQUIRE(kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_PROTECTED_VM));
+
+	pr_info("Testing KVM_MEM_PRIVATE memory regions\n");
+
+	vm = __vm_create(shape, 1, 0);
+
+	mem = mmap(NULL, MEM_REGION_SIZE * 2, PROT_READ | PROT_WRITE,
+		   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+	TEST_ASSERT(mem != MAP_FAILED, "Failed to mmap() host");
+
+	fd = kvm_memfd_alloc(MEM_REGION_SIZE, false);
+	TEST_ASSERT(set_private_region_failed(vm, mem, fd, 0),
+		    "Use restrictedmem_fd without memfd_restricted() should fail");
+
+	fd = memfd_restricted(0);
+	TEST_ASSERT(fd >= 0, "Failed to create restricted memfd");
+
+	TEST_ASSERT(set_private_region_failed(vm, mem, fd, UNALIGNED_OFFSET),
+		    "Set page-unaligned restrictedmem_offset should fail");
+
+	TEST_ASSERT(set_private_region_failed(vm, mem, fd, MEM_REGION_GPA >> 1),
+		    "GPA should has less alignment than restrictedmem_offset");
+
+	TEST_ASSERT(!set_private_region_failed(vm, mem, fd, 0),
+		    "Unexpected failure on creating KVM_MEM_PRIVATE memslot");
+
+	TEST_ASSERT(set_private_region_failed(vm, mem, fd, 0),
+		    "Modify a KVM_MEM_PRIVATE memslot should fail");
+
+	ret = __vm_set_user_memory_region2(vm, MEM_REGION_SLOT + 1,
+					   KVM_MEM_PRIVATE,
+					   MEM_REGION_GPA + MEM_REGION_SIZE,
+					   MEM_REGION_SIZE,
+					   mem + MEM_REGION_SIZE,
+					   fd, MEM_REGION_SIZE - 1);
+	TEST_ASSERT(ret == -1 && errno == EINVAL,
+		    "Set overlapping restrictedmem_offset should fail");
+
+	munmap(mem, MEM_REGION_SIZE * 2);
+	kvm_vm_free(vm);
+}
+
 int main(int argc, char *argv[])
 {
 #ifdef __x86_64__
@@ -401,6 +467,7 @@ int main(int argc, char *argv[])
 #endif
 
 	test_add_max_memory_regions();
+	test_private_regions();
 
 #ifdef __x86_64__
 	if (argc > 1)
