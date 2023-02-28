@@ -32,11 +32,6 @@ int open_path_or_exit(const char *path, int flags)
 	return fd;
 }
 
-static int memfd_restricted(unsigned int flags)
-{
-	return syscall(__NR_memfd_restricted, flags);
-}
-
 /*
  * Open KVM_DEV_PATH if available, otherwise exit the entire program.
  *
