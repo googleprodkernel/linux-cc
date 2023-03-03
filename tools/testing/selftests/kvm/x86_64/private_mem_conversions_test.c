@@ -47,6 +47,16 @@ static void memcmp_h(uint8_t *mem, uint8_t pattern, size_t size)
 			    pattern, i, mem[i]);
 }
 
+static void memcmp_ne_h(uint8_t *mem, uint8_t pattern, size_t size)
+{
+	size_t i;
+
+	for (i = 0; i < size; i++)
+		TEST_ASSERT(mem[i] != pattern,
+			    "Expected not to find 0x%x at offset %lu but got 0x%x",
+			    pattern, i, mem[i]);
+}
+
 /*
  * Run memory conversion tests with explicit conversion:
  * Execute KVM hypercall to map/unmap gpa range which will cause userspace exit
@@ -64,8 +74,14 @@ static void memcmp_h(uint8_t *mem, uint8_t pattern, size_t size)
 
 #define GUEST_STAGE(o, s) { .offset = o, .size = s }
 
-#define GUEST_SYNC4(gpa, size, current_pattern, new_pattern) \
-	ucall(UCALL_SYNC, 4, gpa, size, current_pattern, new_pattern)
+#define UCALL_RW_SHARED (0xca11 - 0)
+#define UCALL_R_PRIVATE (0xca11 - 1)
+
+#define REQUEST_HOST_RW_SHARED(gpa, size, current_pattern, new_pattern) \
+	ucall(UCALL_RW_SHARED, 4, gpa, size, current_pattern, new_pattern)
+
+#define REQUEST_HOST_R_PRIVATE(gpa, size, expected_pattern) \
+	ucall(UCALL_R_PRIVATE, 3, gpa, size, expected_pattern)
 
 static void guest_code(void)
 {
@@ -86,7 +102,7 @@ static void guest_code(void)
 
 	/* Memory should be shared by default. */
 	memset((void *)DATA_GPA, ~init_p, DATA_SIZE);
-	GUEST_SYNC4(DATA_GPA, DATA_SIZE, ~init_p, init_p);
+	REQUEST_HOST_RW_SHARED(DATA_GPA, DATA_SIZE, ~init_p, init_p);
 	memcmp_g(DATA_GPA, init_p, DATA_SIZE);
 
 	for (i = 0; i < ARRAY_SIZE(stages); i++) {
@@ -114,6 +130,12 @@ static void guest_code(void)
 		memset((void *)gpa, p2, size);
 
 		/*
+		 * Host should not be able to read the values written to private
+		 * memory
+		 */
+		REQUEST_HOST_R_PRIVATE(gpa, size, p2);
+
+		/*
 		 * Verify that the private memory was set to pattern two, and
 		 * that shared memory still holds the initial pattern.
 		 */
@@ -133,9 +155,18 @@ static void guest_code(void)
 				continue;
 
 			kvm_hypercall_map_shared(gpa + j, PAGE_SIZE);
-			GUEST_SYNC4(gpa + j, PAGE_SIZE, p1, p3);
+			REQUEST_HOST_RW_SHARED(gpa + j, PAGE_SIZE, p1, p3);
 
 			memcmp_g(gpa + j, p3, PAGE_SIZE);
+		}
+
+		/*
+		 * Even-number pages are still mapped as private, host should
+		 * not be able to read those values.
+		 */
+		for (j = 0; j < size; j += PAGE_SIZE) {
+			if (!((j >> PAGE_SHIFT) & 1))
+				REQUEST_HOST_R_PRIVATE(gpa + j, PAGE_SIZE, p2);
 		}
 
 		/*
@@ -145,7 +176,7 @@ static void guest_code(void)
 		 */
 		kvm_hypercall_map_shared(gpa, size);
 		memset((void *)gpa, p3, size);
-		GUEST_SYNC4(gpa, size, p3, p4);
+		REQUEST_HOST_RW_SHARED(gpa, size, p3, p4);
 		memcmp_g(gpa, p4, size);
 
 		/* Reset the shared memory back to the initial pattern. */
@@ -209,7 +240,18 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type)
 		switch (get_ucall(vcpu, &uc)) {
 		case UCALL_ABORT:
 			REPORT_GUEST_ASSERT_4(uc, "%lx %lx %lx %lx");
-		case UCALL_SYNC: {
+		case UCALL_R_PRIVATE: {
+			uint8_t *hva = addr_gpa2hva(vm, uc.args[0]);
+			uint64_t size = uc.args[1];
+
+			/*
+			 * Try to read hva for private gpa from host, should not
+			 * be able to read private data
+			 */
+			memcmp_ne_h(hva, uc.args[2], size);
+			break;
+		}
+		case UCALL_RW_SHARED: {
 			uint8_t *hva = addr_gpa2hva(vm, uc.args[0]);
 			uint64_t size = uc.args[1];
 
