@@ -335,7 +335,8 @@ static void add_memslot_for_vcpu(
 }
 
 static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
-				 uint8_t nr_vcpus, uint32_t iterations)
+				 uint8_t nr_vcpus, uint32_t iterations,
+				 bool use_multiple_memslots)
 {
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
 	pthread_t threads[KVM_MAX_VCPUS];
@@ -355,6 +356,16 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 	vm_enable_cap(vm, KVM_CAP_EXIT_HYPERCALL, (1 << KVM_HC_MAP_GPA_RANGE));
 
 	npages_for_all_vcpus = DATA_SIZE / vm->page_size * nr_vcpus;
+
+	if (use_multiple_memslots) {
+		for (i = 0; i < nr_vcpus; i++)
+			add_memslot_for_vcpu(vm, src_type, i);
+	} else {
+		vm_userspace_mem_region_add(
+			vm, src_type, DATA_GPA_BASE, DATA_SLOT_BASE,
+			npages_for_all_vcpus, KVM_MEM_PRIVATE);
+	}
+
 	virt_map(vm, DATA_GPA_BASE, DATA_GPA_BASE, npages_for_all_vcpus);
 
 	for (i = 0; i < nr_vcpus; i++)
@@ -371,13 +382,16 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 	for (i = 0; i < nr_vcpus; i++)
 		pthread_join(threads[i], NULL);
 
-	test_invalidation_code_unbound(vm, nr_vcpus, DATA_SIZE);
+	if (!use_multiple_memslots)
+		test_invalidation_code_unbound(vm, 1, DATA_SIZE * nr_vcpus);
+	else
+		test_invalidation_code_unbound(vm, nr_vcpus, DATA_SIZE);
 }
 
 static void usage(const char *command)
 {
 	puts("");
-	printf("usage: %s [-h] [-s mem-type] [-n number-of-vcpus] [-i number-of-iterations]\n",
+	printf("usage: %s [-h] [-m] [-s mem-type] [-n number-of-vcpus] [-i number-of-iterations]\n",
 	       command);
 	puts("");
 	backing_src_help("-s");
@@ -388,6 +402,8 @@ static void usage(const char *command)
 	puts(" -i: specify the number iterations of memory conversion");
 	puts("     tests to run. (default: 10)");
 	puts("");
+	puts(" -m: use multiple memslots (default: use 1 memslot)");
+	puts("");
 }
 
 int main(int argc, char *argv[])
@@ -395,12 +411,13 @@ int main(int argc, char *argv[])
 	enum vm_mem_backing_src_type src_type = DEFAULT_VM_MEM_SRC;
 	uint8_t nr_vcpus = 2;
 	uint32_t iterations = 10;
+	bool use_multiple_memslots = false;
 	int opt;
 
 	TEST_REQUIRE(kvm_has_cap(KVM_CAP_EXIT_HYPERCALL));
 	TEST_REQUIRE(kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_PROTECTED_VM));
 
-	while ((opt = getopt(argc, argv, "hs:n:i:")) != -1) {
+	while ((opt = getopt(argc, argv, "mhs:n:i:")) != -1) {
 		switch (opt) {
 		case 'n':
 			nr_vcpus = atoi_positive("nr_vcpus", optarg);
@@ -411,6 +428,9 @@ int main(int argc, char *argv[])
 		case 's':
 			src_type = parse_backing_src_type(optarg);
 			break;
+		case 'm':
+			use_multiple_memslots = true;
+			break;
 		case 'h':
 		default:
 			usage(argv[0]);
@@ -418,6 +438,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	test_mem_conversions(src_type, nr_vcpus, iterations);
+	test_mem_conversions(src_type, nr_vcpus, iterations, use_multiple_memslots);
 	return 0;
 }
