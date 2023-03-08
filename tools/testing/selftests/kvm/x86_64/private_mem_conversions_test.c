@@ -324,7 +324,8 @@ void *thread_function(void *input)
 }
 
 static void add_memslot_for_vcpu(
-	struct kvm_vm *vm, enum vm_mem_backing_src_type src_type, uint8_t vcpu_id)
+	struct kvm_vm *vm, enum vm_mem_backing_src_type src_type, uint8_t vcpu_id,
+	int restrictedmem_fd, uint64_t restrictedmem_offset)
 {
 	uint64_t gpa = data_gpa_base_for_vcpu_id(vcpu_id);
 	uint32_t slot = DATA_SLOT_BASE + vcpu_id;
@@ -336,7 +337,8 @@ static void add_memslot_for_vcpu(
 
 static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 				 uint8_t nr_vcpus, uint32_t iterations,
-				 bool use_multiple_memslots)
+				 bool use_multiple_memslots,
+				 bool use_different_restrictedmem_files)
 {
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
 	pthread_t threads[KVM_MAX_VCPUS];
@@ -356,20 +358,27 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 	vm_enable_cap(vm, KVM_CAP_EXIT_HYPERCALL, (1 << KVM_HC_MAP_GPA_RANGE));
 
 	npages_for_all_vcpus = DATA_SIZE / vm->page_size * nr_vcpus;
+	virt_map(vm, DATA_GPA_BASE, DATA_GPA_BASE, npages_for_all_vcpus);
 
 	if (use_multiple_memslots) {
-		for (i = 0; i < nr_vcpus; i++)
-			add_memslot_for_vcpu(vm, src_type, i);
+		int fd = memfd_restricted(0);
+		int offset = 0;
+
+		for (i = 0; i < nr_vcpus; i++) {
+			if (use_different_restrictedmem_files) {
+				if (i > 0)
+					fd = memfd_restricted(0);
+			} else {
+				offset = i * DATA_GPA_SPACING;
+			}
+
+			add_memslot_for_vcpu(vm, src_type, i, fd, offset);
+		}
 	} else {
 		vm_userspace_mem_region_add(
 			vm, src_type, DATA_GPA_BASE, DATA_SLOT_BASE,
 			npages_for_all_vcpus, KVM_MEM_PRIVATE);
 	}
-
-	virt_map(vm, DATA_GPA_BASE, DATA_GPA_BASE, npages_for_all_vcpus);
-
-	for (i = 0; i < nr_vcpus; i++)
-		add_memslot_for_vcpu(vm, src_type, i);
 
 	for (i = 0; i < nr_vcpus; i++) {
 		args[i].vm = vm;
@@ -382,7 +391,7 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 	for (i = 0; i < nr_vcpus; i++)
 		pthread_join(threads[i], NULL);
 
-	if (!use_multiple_memslots)
+	if (!use_multiple_memslots || !use_different_restrictedmem_files)
 		test_invalidation_code_unbound(vm, 1, DATA_SIZE * nr_vcpus);
 	else
 		test_invalidation_code_unbound(vm, nr_vcpus, DATA_SIZE);
@@ -391,8 +400,9 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 static void usage(const char *command)
 {
 	puts("");
-	printf("usage: %s [-h] [-m] [-s mem-type] [-n number-of-vcpus] [-i number-of-iterations]\n",
-	       command);
+	printf("usage: %s\n", command);
+	printf("       [-h] [-m] [-f] [-s mem-type]\n");
+	printf("       [-n number-of-vcpus] [-i number-of-iterations]\n");
 	puts("");
 	backing_src_help("-s");
 	puts("");
@@ -404,6 +414,9 @@ static void usage(const char *command)
 	puts("");
 	puts(" -m: use multiple memslots (default: use 1 memslot)");
 	puts("");
+	puts(" -f: use different restrictedmem files for each memslot");
+	puts("     (default: use 1 restrictedmem file for all memslots)");
+	puts("");
 }
 
 int main(int argc, char *argv[])
@@ -412,12 +425,13 @@ int main(int argc, char *argv[])
 	uint8_t nr_vcpus = 2;
 	uint32_t iterations = 10;
 	bool use_multiple_memslots = false;
+	bool use_different_restrictedmem_files = false;
 	int opt;
 
 	TEST_REQUIRE(kvm_has_cap(KVM_CAP_EXIT_HYPERCALL));
 	TEST_REQUIRE(kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_PROTECTED_VM));
 
-	while ((opt = getopt(argc, argv, "mhs:n:i:")) != -1) {
+	while ((opt = getopt(argc, argv, "fmhs:n:i:")) != -1) {
 		switch (opt) {
 		case 'n':
 			nr_vcpus = atoi_positive("nr_vcpus", optarg);
@@ -431,6 +445,9 @@ int main(int argc, char *argv[])
 		case 'm':
 			use_multiple_memslots = true;
 			break;
+		case 'f':
+			use_different_restrictedmem_files = true;
+			break;
 		case 'h':
 		default:
 			usage(argv[0]);
@@ -438,6 +455,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	test_mem_conversions(src_type, nr_vcpus, iterations, use_multiple_memslots);
+	if (!use_multiple_memslots && use_different_restrictedmem_files) {
+		printf("Overriding -f flag: ");
+		puts("Using just 1 restrictedmem file since only 1 memslot is to be used.");
+		use_different_restrictedmem_files = false;
+	}
+
+	test_mem_conversions(src_type, nr_vcpus, iterations, use_multiple_memslots,
+			     use_different_restrictedmem_files);
 	return 0;
 }
