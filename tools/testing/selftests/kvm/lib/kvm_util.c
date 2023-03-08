@@ -899,6 +899,43 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 	uint64_t guest_paddr, uint32_t slot, uint64_t npages,
 	uint32_t flags)
 {
+	int restrictedmem_fd;
+
+	restrictedmem_fd = flags & KVM_MEM_PRIVATE ? memfd_restricted(0) : 0;
+	vm_userspace_mem_region_add_with_restrictedmem(
+		vm, src_type, guest_paddr, slot, npages, flags,
+		restrictedmem_fd, 0);
+}
+
+/*
+ * VM Userspace Memory Region Add With restrictedmem
+ *
+ * Input Args:
+ *   vm - Virtual Machine
+ *   src_type - Storage source for this region.
+ *              NULL to use anonymous memory.
+ *   guest_paddr - Starting guest physical address
+ *   slot - KVM region slot
+ *   npages - Number of physical pages
+ *   flags - KVM memory region flags (e.g. KVM_MEM_LOG_DIRTY_PAGES)
+ *   restrictedmem_fd - restrictedmem_fd for use with restrictedmem
+ *   restrictedmem_offset - offset within restrictedmem_fd to be used
+ *
+ * Output Args: None
+ *
+ * Return: None
+ *
+ * Allocates a memory area of the number of pages specified by npages
+ * and maps it to the VM specified by vm, at a starting physical address
+ * given by guest_paddr.  The region is created with a KVM region slot
+ * given by slot, which must be unique and < KVM_MEM_SLOTS_NUM.  The
+ * region is created with the flags given by flags.
+ */
+void vm_userspace_mem_region_add_with_restrictedmem(struct kvm_vm *vm,
+	enum vm_mem_backing_src_type src_type,
+	uint64_t guest_paddr, uint32_t slot, uint64_t npages,
+	uint32_t flags, int restrictedmem_fd, uint64_t restrictedmem_offset)
+{
 	int ret;
 	struct userspace_mem_region *region;
 	size_t backing_src_pagesz = get_backing_src_pagesz(src_type);
@@ -1011,8 +1048,8 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 	region->backing_src_type = src_type;
 
 	if (flags & KVM_MEM_PRIVATE) {
-		region->region.restrictedmem_fd = memfd_restricted(0);
-		region->region.restrictedmem_offset = 0;
+		region->region.restrictedmem_fd = restrictedmem_fd;
+		region->region.restrictedmem_offset = restrictedmem_offset;
 
 		TEST_ASSERT(region->region.restrictedmem_fd >= 0,
 			    "Failed to create restricted memfd");
@@ -1030,10 +1067,11 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 	TEST_ASSERT(ret == 0, "KVM_SET_USER_MEMORY_REGION2 IOCTL failed,\n"
 		"  rc: %i errno: %i\n"
 		"  slot: %u flags: 0x%x\n"
-		"  guest_phys_addr: 0x%lx size: 0x%lx restricted fd: %d\n",
+		"  guest_phys_addr: 0x%lx size: 0x%lx\n"
+		"  restricted fd: %d restricted_offset: 0x%llx\n",
 		ret, errno, slot, flags,
 		guest_paddr, (uint64_t) region->region.memory_size,
-		region->region.restrictedmem_fd);
+		region->region.restrictedmem_fd, region->region.restrictedmem_offset);
 
 	/* Add to quick lookup data structures */
 	vm_userspace_mem_region_gpa_insert(&vm->regions.gpa_tree, region);
