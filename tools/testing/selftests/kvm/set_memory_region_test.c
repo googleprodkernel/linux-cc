@@ -397,7 +397,7 @@ static bool set_private_region_failed(struct kvm_vm *vm, void *hva,
 static void test_private_regions(void)
 {
 	int ret;
-	struct kvm_vm *vm;
+	struct kvm_vm *vm, *vm2;
 	void *mem;
 	int fd;
 
@@ -412,7 +412,7 @@ static void test_private_regions(void)
 
 	vm = __vm_create(shape, 1, 0);
 
-	mem = mmap(NULL, MEM_REGION_SIZE * 2, PROT_READ | PROT_WRITE,
+	mem = mmap(NULL, MEM_REGION_SIZE * 3, PROT_READ | PROT_WRITE,
 		   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 	TEST_ASSERT(mem != MAP_FAILED, "Failed to mmap() host");
 
@@ -444,8 +444,31 @@ static void test_private_regions(void)
 	TEST_ASSERT(ret == -1 && errno == EINVAL,
 		    "Set overlapping restrictedmem_offset should fail");
 
-	munmap(mem, MEM_REGION_SIZE * 2);
+	ret = __vm_set_user_memory_region2(vm, MEM_REGION_SLOT + 1,
+					   KVM_MEM_PRIVATE,
+					   MEM_REGION_GPA + MEM_REGION_SIZE,
+					   MEM_REGION_SIZE,
+					   mem + MEM_REGION_SIZE,
+					   fd, MEM_REGION_SIZE);
+	TEST_ASSERT(!ret,
+		    "Different memslots should be able to share a restrictedmem_fd");
+
+	vm2 = __vm_create(shape, 1, 0);
+	TEST_ASSERT(set_private_region_failed(vm2, mem + 2 * MEM_REGION_SIZE, fd, 0),
+		    "Pages (offsets) of a restrictedmem_fd should be exclusive to a VM");
+
+	ret = __vm_set_user_memory_region2(vm2, MEM_REGION_SLOT,
+					   KVM_MEM_PRIVATE,
+					   MEM_REGION_GPA + 2 * MEM_REGION_SIZE,
+					   MEM_REGION_SIZE,
+					   mem + 2 * MEM_REGION_SIZE,
+					   fd, 2 * MEM_REGION_SIZE);
+	TEST_ASSERT(!ret,
+		    "Different VMs should be able to share a restrictedmem_fd");
+
+	munmap(mem, MEM_REGION_SIZE * 3);
 	kvm_vm_free(vm);
+	kvm_vm_free(vm2);
 }
 
 int main(int argc, char *argv[])
