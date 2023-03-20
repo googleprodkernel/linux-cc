@@ -2248,20 +2248,22 @@ unsigned long shmem_get_unmapped_area(struct file *file,
 }
 
 #ifdef CONFIG_NUMA
+
 static int shmem_set_policy(struct vm_area_struct *vma, struct mempolicy *mpol)
 {
-	struct inode *inode = file_inode(vma->vm_file);
-	return mpol_set_shared_policy(&SHMEM_I(inode)->policy, vma, mpol);
+	struct shared_policy *info;
+
+	info = shmem_shared_policy(vma->vm_file);
+	return mpol_set_shared_policy(info, vma, mpol);
 }
 
 static struct mempolicy *shmem_get_policy(struct vm_area_struct *vma,
 					  unsigned long addr)
 {
-	struct inode *inode = file_inode(vma->vm_file);
 	pgoff_t index;
 
 	index = ((addr - vma->vm_start) >> PAGE_SHIFT) + vma->vm_pgoff;
-	return mpol_shared_policy_lookup(&SHMEM_I(inode)->policy, index);
+	return mpol_shared_policy_lookup(shmem_shared_policy(vma->vm_file), index);
 }
 #endif
 

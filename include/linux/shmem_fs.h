@@ -134,6 +134,13 @@ static inline bool shmem_file(struct file *file)
 	return shmem_mapping(file->f_mapping);
 }
 
+static inline struct shared_policy *shmem_shared_policy(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+
+	return &SHMEM_I(inode)->policy;
+}
+
 /*
  * If fallocate(FALLOC_FL_KEEP_SIZE) has been used, there may be pages
  * beyond i_size's notion of EOF, which fallocate has committed to reserving:
