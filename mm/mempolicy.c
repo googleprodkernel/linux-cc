@@ -2817,28 +2817,37 @@ put_mpol:
 	}
 }
 
-int mpol_set_shared_policy(struct shared_policy *info,
-			struct vm_area_struct *vma, struct mempolicy *npol)
+int __mpol_set_shared_policy(struct shared_policy *info, struct mempolicy *mpol,
+			     unsigned long pgoff_start, unsigned long npages)
 {
 	int err;
 	struct sp_node *new = NULL;
-	unsigned long sz = vma_pages(vma);
+	unsigned long pgoff_end = pgoff_start + npages;
 
 	pr_debug("set_shared_policy %lx sz %lu %d %d %lx\n",
-		 vma->vm_pgoff,
-		 sz, npol ? npol->mode : -1,
-		 npol ? npol->flags : -1,
-		 npol ? nodes_addr(npol->nodes)[0] : NUMA_NO_NODE);
+		 pgoff_start, npages,
+		 mpol ? mpol->mode : -1,
+		 mpol ? mpol->flags : -1,
+		 mpol ? nodes_addr(mpol->nodes)[0] : NUMA_NO_NODE);
 
-	if (npol) {
-		new = sp_alloc(vma->vm_pgoff, vma->vm_pgoff + sz, npol);
+	if (mpol) {
+		new = sp_alloc(pgoff_start, pgoff_end, mpol);
 		if (!new)
 			return -ENOMEM;
 	}
-	err = shared_policy_replace(info, vma->vm_pgoff, vma->vm_pgoff+sz, new);
+
+	err = shared_policy_replace(info, pgoff_start, pgoff_end, new);
+
 	if (err && new)
 		sp_free(new);
+
 	return err;
+}
+
+int mpol_set_shared_policy(struct shared_policy *info,
+			struct vm_area_struct *vma, struct mempolicy *mpol)
+{
+	return __mpol_set_shared_policy(info, mpol, vma->vm_pgoff, vma_pages(vma));
 }
 
 /* Free a backing policy store on inode delete. */
