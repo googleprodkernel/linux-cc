@@ -24,6 +24,8 @@ struct kvm_tdx {
 	atomic_t tdh_mem_track;
 
 	u64 tsc_offset;
+
+	atomic_t migration_in_progress;
 };
 
 union tdx_exit_reason {
