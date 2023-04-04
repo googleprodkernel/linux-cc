@@ -11,7 +11,7 @@
 #include "tdx.h"
 #include "tdx_arch.h"
 
-static bool enable_tdx __ro_after_init;
+static bool enable_tdx __ro_after_init = IS_ENABLED(CONFIG_INTEL_TDX_HOST);
 module_param_named(tdx, enable_tdx, bool, 0444);
 
 static int vt_hardware_enable(void)

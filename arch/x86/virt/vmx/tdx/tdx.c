@@ -1257,12 +1257,6 @@ static int init_tdx_module(void)
 	if (ret)
 		goto out_free_pamts;
 
-	/*
-	 * Reserve the first TDX KeyID as global KeyID to protect
-	 * TDX module metadata.
-	 */
-	tdx_global_keyid = tdx_keyid_start;
-
 	/* Initialize TDMRs to complete the TDX module initialization */
 	ret = init_tdmrs(&tdmr_list);
 

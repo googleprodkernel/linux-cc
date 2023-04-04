@@ -857,7 +857,7 @@ void tdx_handle_exit_irqoff(struct kvm_vcpu *vcpu)
 	u16 exit_reason = tdx->exit_reason.basic;
 
 	if (exit_reason == EXIT_REASON_EXCEPTION_NMI)
-		vmx_handle_exception_nmi_irqoff(vcpu, tdexit_intr_info(vcpu));
+		vmx_handle_exception_irqoff(vcpu, tdexit_intr_info(vcpu));
 	else if (exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT)
 		vmx_handle_external_interrupt_irqoff(vcpu,
 						     tdexit_intr_info(vcpu));
