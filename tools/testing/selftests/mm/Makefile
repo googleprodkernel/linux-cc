@@ -46,6 +46,8 @@ TEST_GEN_FILES += map_fixed_noreplace
 TEST_GEN_FILES += map_hugetlb
 TEST_GEN_FILES += map_populate
 TEST_GEN_FILES += memfd_restricted
+TEST_GEN_FILES += memfd_restricted_bind
+TEST_GEN_FILES += restrictedmem_testmod.ko
 TEST_GEN_FILES += memfd_secret
 TEST_GEN_FILES += migration
 TEST_GEN_FILES += mlock-random-test
@@ -170,6 +172,12 @@ $(OUTPUT)/mlock-random-test $(OUTPUT)/memfd_secret: LDLIBS += -lcap
 $(OUTPUT)/ksm_tests: LDLIBS += -lnuma
 
 $(OUTPUT)/migration: LDLIBS += -lnuma
+
+$(OUTPUT)/memfd_restricted_bind: LDLIBS += -lnuma
+$(OUTPUT)/restrictedmem_testmod.ko: $(wildcard restrictedmem_testmod/Makefile restrictedmem_testmod/*.[ch])
+	$(call msg,MOD,,$@)
+	$(Q)$(MAKE) -C restrictedmem_testmod
+	$(Q)cp restrictedmem_testmod/restrictedmem_testmod.ko $@
 
 local_config.mk local_config.h: check_config.sh
 	/bin/sh ./check_config.sh $(CC)

@@ -40,6 +40,8 @@ separated by spaces:
 	test memadvise(2) MADV_POPULATE_{READ,WRITE} options
 - memfd_restricted_
 	test memfd_restricted(2)
+- memfd_restricted_bind
+	test memfd_restricted_bind(2)
 - memfd_secret
 	test memfd_secret(2)
 - process_mrelease
@@ -239,6 +241,10 @@ CATEGORY="hmm" run_test ./test_hmm.sh smoke
 CATEGORY="madv_populate" run_test ./madv_populate
 
 CATEGORY="memfd_restricted" run_test ./memfd_restricted
+
+test_selected "memfd_restricted_bind" && insmod ./restrictedmem_testmod.ko && \
+  CATEGORY="memfd_restricted_bind" run_test ./memfd_restricted_bind && \
+  rmmod restrictedmem_testmod > /dev/null
 
 CATEGORY="memfd_secret" run_test ./memfd_secret
 
