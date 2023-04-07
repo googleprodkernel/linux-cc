@@ -1484,10 +1484,13 @@ struct kvm_arch {
 #ifdef CONFIG_X86_64
 #ifdef CONFIG_KVM_PROVE_MMU
 	/*
-	 * The number of TDP MMU pages across all roots.  Used only to sanity
-	 * check that KVM isn't leaking TDP MMU pages.
+	 * The number of non-mirrored TDP MMU pages across all roots.
+	 * Used only to sanity check that KVM isn't leaking TDP MMU pages.
 	 */
 	atomic64_t tdp_mmu_pages;
+
+	/* Same as tdp_mmu_pages but only for mirror pages. */
+	atomic64_t tdp_mirror_mmu_pages;
 #endif
 
 	/*
