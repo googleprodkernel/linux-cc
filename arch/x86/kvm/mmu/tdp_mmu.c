@@ -251,6 +251,22 @@ static void tdp_mmu_init_child_sp(struct kvm_mmu_page *child_sp,
 	tdp_mmu_init_sp(child_sp, iter->sptep, iter->gfn, role);
 }
 
+struct kvm_mmu_page *
+kvm_tdp_mmu_get_vcpu_root(struct kvm_vcpu *vcpu,
+			  union kvm_mmu_page_role role)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct kvm_mmu_page *root;
+
+	lockdep_assert_held(&kvm->mmu_lock);
+	list_for_each_entry(root, &kvm->arch.tdp_mmu_roots, link) {
+		if (root->role.word == role.word &&
+		    !WARN_ON_ONCE(!kvm_tdp_mmu_get_root(root)))
+			return root;
+	}
+	return NULL;
+}
+
 void kvm_tdp_mmu_alloc_root(struct kvm_vcpu *vcpu, bool mirror)
 {
 	struct kvm_mmu *mmu = vcpu->arch.mmu;
@@ -285,11 +301,9 @@ void kvm_tdp_mmu_alloc_root(struct kvm_vcpu *vcpu, bool mirror)
 	 * fails, as the last reference to a root can only be put *after* the
 	 * root has been invalidated, which requires holding mmu_lock for write.
 	 */
-	list_for_each_entry(root, &kvm->arch.tdp_mmu_roots, link) {
-		if (root->role.word == role.word &&
-		    !WARN_ON_ONCE(!kvm_tdp_mmu_get_root(root)))
-			goto out_spin_unlock;
-	}
+	root = kvm_tdp_mmu_get_vcpu_root(vcpu, role);
+	if (!!root)
+		goto out_spin_unlock;
 
 	root = tdp_mmu_alloc_sp(vcpu);
 	tdp_mmu_init_sp(root, NULL, 0, role);
@@ -319,6 +333,43 @@ out_read_unlock:
 		mmu->root.hpa = __pa(root->spt);
 		mmu->root.pgd = 0;
 	}
+}
+
+hpa_t kvm_tdp_mmu_move_mirror_pages_from(struct kvm_vcpu *vcpu,
+					 struct kvm_vcpu *src_vcpu)
+{
+	union kvm_mmu_page_role role = vcpu->arch.mmu->root_role;
+	struct kvm *kvm = vcpu->kvm;
+	struct kvm *src_kvm = src_vcpu->kvm;
+	struct kvm_mmu_page *mirror_root = NULL;
+	s64 num_mirror_pages, old;
+
+	lockdep_assert_held_read(&src_vcpu->kvm->mmu_lock);
+	lockdep_assert_held_write(&vcpu->kvm->mmu_lock);
+
+	/* Find the mirror root of the source. */
+	role.is_mirror = true;
+	mirror_root = kvm_tdp_mmu_get_vcpu_root(src_vcpu, role);
+	if (!mirror_root)
+		return INVALID_PAGE;
+
+	/* Remove the mirror root from the src kvm and add it to dst kvm. */
+	spin_lock(&src_vcpu->kvm->arch.tdp_mmu_pages_lock);
+	list_del_rcu(&mirror_root->link);
+	spin_unlock(&src_vcpu->kvm->arch.tdp_mmu_pages_lock);
+
+	/* The destination holds a write lock so no spin_lock required. */
+	list_add_rcu(&mirror_root->link, &kvm->arch.tdp_mmu_roots);
+
+#ifdef CONFIG_KVM_PROVE_MMU
+	num_mirror_pages = atomic64_read(&src_kvm->arch.tdp_mirror_mmu_pages);
+	old = atomic64_cmpxchg(&kvm->arch.tdp_mirror_mmu_pages, 0,
+			       num_mirror_pages);
+	/* The destination VM should have no mirror pages at this point. */
+	WARN_ON(old);
+	atomic64_set(&src_kvm->arch.tdp_mirror_mmu_pages, 0);
+#endif
+	return __pa(mirror_root->spt);
 }
 
 static void handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,

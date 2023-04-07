@@ -63,6 +63,12 @@ static inline struct kvm_mmu_page *tdp_mmu_get_root(struct kvm_vcpu *vcpu,
 	return root_to_sp(vcpu->arch.mmu->root.hpa);
 }
 
+struct kvm_mmu_page *
+kvm_tdp_mmu_get_vcpu_root(struct kvm_vcpu *vcpu,
+			  union kvm_mmu_page_role role);
+hpa_t kvm_tdp_mmu_move_mirror_pages_from(struct kvm_vcpu *vcpu,
+					  struct kvm_vcpu *src_vcpu);
+
 bool kvm_tdp_mmu_zap_leafs(struct kvm *kvm, gfn_t start, gfn_t end, bool flush);
 bool kvm_tdp_mmu_zap_sp(struct kvm *kvm, struct kvm_mmu_page *sp);
 void kvm_tdp_mmu_zap_all(struct kvm *kvm);

@@ -3943,6 +3943,72 @@ out_unlock:
 	return r;
 }
 
+int kvm_mmu_move_mirror_pages_from(struct kvm_vcpu *vcpu,
+				   struct kvm_vcpu *src_vcpu)
+{
+	struct kvm_mmu *mmu = vcpu->arch.mmu;
+	struct kvm_mmu *src_mmu = src_vcpu->arch.mmu;
+	gfn_t gfn_shared = kvm_gfn_direct_bits(vcpu->kvm);
+	hpa_t mirror_root_hpa;
+	int r = -EINVAL;
+
+	if (!gfn_shared)
+		return r;
+
+	r = mmu_topup_memory_caches(vcpu, !vcpu->arch.mmu->root_role.direct);
+	if (r)
+		return r;
+
+	/* Hold locks for both src and dst. Always take the src lock first. */
+	read_lock(&src_vcpu->kvm->mmu_lock);
+	write_lock_nested(&vcpu->kvm->mmu_lock, SINGLE_DEPTH_NESTING);
+
+	WARN_ON_ONCE(!is_tdp_mmu_active(vcpu));
+	WARN_ON_ONCE(!is_tdp_mmu_active(src_vcpu));
+
+	/*
+	 * The mirror root is moved from the src to the dst and is marked as
+	 * invalid in the src.
+	 */
+	mirror_root_hpa = kvm_tdp_mmu_move_mirror_pages_from(vcpu, src_vcpu);
+	if (mirror_root_hpa == INVALID_PAGE) {
+		struct kvm_mmu_page *mirror_root;
+		union kvm_mmu_page_role role = vcpu->arch.mmu->root_role;
+
+		/*
+		 * This likely means that the mirror root was already moved by
+		 * another vCPU.
+		 */
+		role.is_mirror = true;
+		mirror_root = kvm_tdp_mmu_get_vcpu_root(vcpu, role);
+		if (!mirror_root) {
+			r = -EINVAL;
+			goto out_unlock;
+		}
+		mirror_root_hpa = __pa(mirror_root->spt);
+	}
+
+	mmu->mirror_root_hpa = mirror_root_hpa;
+	mmu_free_root_page(src_vcpu->kvm, &src_mmu->mirror_root_hpa, NULL);
+	write_unlock(&vcpu->kvm->mmu_lock);
+	read_unlock(&src_vcpu->kvm->mmu_lock);
+
+	/* The direct root is allocated normally and is not moved from src. */
+	kvm_tdp_mmu_alloc_root(vcpu, false);
+
+	kvm_mmu_load_pgd(vcpu);
+	kvm_x86_call(flush_tlb_current)(vcpu);
+
+	return r;
+
+out_unlock:
+	write_unlock(&vcpu->kvm->mmu_lock);
+	read_unlock(&src_vcpu->kvm->mmu_lock);
+
+	return r;
+}
+EXPORT_SYMBOL(kvm_mmu_move_mirror_pages_from);
+
 static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu *mmu = vcpu->arch.mmu;
