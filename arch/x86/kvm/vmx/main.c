@@ -879,6 +879,14 @@ static int vt_gmem_private_max_mapping_level(struct kvm *kvm, kvm_pfn_t pfn)
 	return 0;
 }
 
+static int vt_move_enc_context_from(struct kvm *kvm, struct kvm *source_kvm)
+{
+	if (!is_td(kvm))
+		return -ENOTTY;
+
+	return tdx_vm_move_enc_context_from(kvm, source_kvm);
+}
+
 #define vt_op(name) vt_##name
 #define vt_op_tdx_only(name) vt_##name
 #else /* CONFIG_KVM_INTEL_TDX */
@@ -1044,7 +1052,9 @@ struct kvm_x86_ops vt_x86_ops __initdata = {
 	.mem_enc_ioctl = vt_op_tdx_only(mem_enc_ioctl),
 	.vcpu_mem_enc_ioctl = vt_op_tdx_only(vcpu_mem_enc_ioctl),
 
-	.private_max_mapping_level = vt_op_tdx_only(gmem_private_max_mapping_level)
+	.private_max_mapping_level = vt_op_tdx_only(gmem_private_max_mapping_level),
+
+	.vm_move_enc_context_from = vt_move_enc_context_from
 };
 
 struct kvm_x86_init_ops vt_init_ops __initdata = {

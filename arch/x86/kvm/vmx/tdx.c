@@ -626,6 +626,7 @@ int tdx_vm_init(struct kvm *kvm)
 	kvm->arch.has_protected_state = true;
 	kvm->arch.has_private_mem = true;
 	kvm->arch.disabled_quirks |= KVM_X86_QUIRK_IGNORE_GUEST_PAT;
+	kvm->arch.use_vm_enc_ctxt_op = true;
 
 	/*
 	 * Because guest TD is protected, VMM can't parse the instruction in TD.
@@ -3523,4 +3524,27 @@ int __init tdx_bringup(void)
 success_disable_tdx:
 	enable_tdx = 0;
 	return 0;
+}
+
+static __always_inline bool tdx_finalized(struct kvm *kvm)
+{
+	struct kvm_tdx *tdx_kvm = to_kvm_tdx(kvm);
+
+	return tdx_kvm->state == TD_STATE_RUNNABLE;
+}
+
+static int tdx_migrate_from(struct kvm *dst, struct kvm *src)
+{
+	return -EINVAL;
+}
+
+int tdx_vm_move_enc_context_from(struct kvm *kvm, struct kvm *src_kvm)
+{
+	if (!is_td(kvm) || !is_td(src_kvm))
+		return -EINVAL;
+
+	if (tdx_finalized(kvm) || !tdx_finalized(src_kvm))
+		return -EINVAL;
+
+	return tdx_migrate_from(kvm, src_kvm);
 }
