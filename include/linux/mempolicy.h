@@ -126,7 +126,7 @@ struct shared_policy {
 
 int vma_dup_policy(struct vm_area_struct *src, struct vm_area_struct *dst);
 struct mempolicy *mpol_create(
-	unsigned long mode, const unsigned long __user *nmask, unsigned long maxnode)
+	unsigned long mode, const unsigned long __user *nmask, unsigned long maxnode);
 void mpol_shared_policy_init(struct shared_policy *sp, struct mempolicy *mpol);
 int __mpol_set_shared_policy(struct shared_policy *info, struct mempolicy *mpol,
 			     unsigned long pgoff_start, unsigned long npages);

@@ -1059,6 +1059,11 @@ asmlinkage long sys_set_mempolicy_home_node(unsigned long start, unsigned long l
 					    unsigned long home_node,
 					    unsigned long flags);
 asmlinkage long sys_memfd_restricted(unsigned int flags);
+asmlinkage long sys_memfd_restricted_bind(int fd, struct file_range __user *range,
+					  unsigned long mode,
+					  const unsigned long __user *nmask,
+					  unsigned long maxnode,
+					  unsigned int flags);
 
 /*
  * Architecture-specific system calls

@@ -6,8 +6,8 @@
 #ifndef _UAPI_LINUX_MEMPOLICY_H
 #define _UAPI_LINUX_MEMPOLICY_H
 
+#include <asm-generic/posix_types.h>
 #include <linux/errno.h>
-
 
 /*
  * Both the MPOL_* mempolicy mode and the MPOL_F_* optional mode flags are
@@ -71,5 +71,10 @@ enum {
 #define RECLAIM_ZONE	(1<<0)	/* Run shrink_inactive_list on the zone */
 #define RECLAIM_WRITE	(1<<1)	/* Writeout pages during reclaim */
 #define RECLAIM_UNMAP	(1<<2)	/* Unmap pages during reclaim */
+
+struct file_range {
+	__kernel_loff_t offset;
+	__kernel_size_t len;
+};
 
 #endif /* _UAPI_LINUX_MEMPOLICY_H */

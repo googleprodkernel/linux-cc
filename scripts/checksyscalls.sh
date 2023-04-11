@@ -46,6 +46,7 @@ cat << EOF
 
 #ifndef __ARCH_WANT_MEMFD_RESTRICTED
 #define __IGNORE_memfd_restricted
+#define __IGNORE_memfd_restricted_bind
 #endif
 
 /* Missing flags argument */

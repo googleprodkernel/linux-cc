@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/mempolicy.h>
 #include "linux/sbitmap.h"
 #include <linux/pagemap.h>
 #include <linux/pseudo_fs.h>
@@ -359,3 +360,77 @@ int restrictedmem_get_page(struct file *file, pgoff_t offset,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(restrictedmem_get_page);
+
+static int restrictedmem_set_shared_policy(
+	struct file *file, loff_t start, size_t len, struct mempolicy *mpol)
+{
+	struct restrictedmem *rm;
+	unsigned long end;
+
+	if (!PAGE_ALIGNED(start))
+		return -EINVAL;
+
+	len = PAGE_ALIGN(len);
+	end = start + len;
+
+	if (end < start)
+		return -EINVAL;
+	if (end == start)
+		return 0;
+
+	rm = file->f_mapping->private_data;
+	return __mpol_set_shared_policy(shmem_shared_policy(rm->memfd), mpol,
+					start >> PAGE_SHIFT, len >> PAGE_SHIFT);
+}
+
+static long do_memfd_restricted_bind(
+	int fd, loff_t offset, size_t len,
+	unsigned long mode, const unsigned long __user *nmask,
+	unsigned long maxnode, unsigned int flags)
+{
+	long ret;
+	struct fd f;
+	struct mempolicy *mpol;
+
+	/* None of the flags are supported */
+	if (flags)
+		return -EINVAL;
+
+	f = fdget_raw(fd);
+	if (!f.file)
+		return -EBADF;
+
+	if (!file_is_restrictedmem(f.file))
+		return -EINVAL;
+
+	mpol = mpol_create(mode, nmask, maxnode);
+	if (IS_ERR(mpol)) {
+		ret = PTR_ERR(mpol);
+		goto out;
+	}
+
+	ret = restrictedmem_set_shared_policy(f.file, offset, len, mpol);
+
+	mpol_put(mpol);
+
+out:
+	fdput(f);
+
+	return ret;
+}
+
+SYSCALL_DEFINE6(memfd_restricted_bind, int, fd, struct file_range __user *, range,
+		unsigned long, mode, const unsigned long __user *, nmask,
+		unsigned long, maxnode, unsigned int, flags)
+{
+	loff_t offset;
+	size_t len;
+
+	if (unlikely(get_user(offset, &range->offset)))
+		return -EFAULT;
+	if (unlikely(get_user(len, &range->len)))
+		return -EFAULT;
+
+	return do_memfd_restricted_bind(fd, offset, len, mode, nmask,
+					    maxnode, flags);
+}

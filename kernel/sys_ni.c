@@ -362,6 +362,7 @@ COND_SYSCALL(memfd_secret);
 
 /* memfd_restricted */
 COND_SYSCALL(memfd_restricted);
+COND_SYSCALL(memfd_restricted_bind);
 
 /*
  * Architecture specific weak syscall entries.
