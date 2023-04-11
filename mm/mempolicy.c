@@ -3181,3 +3181,42 @@ void mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol)
 		p += scnprintf(p, buffer + maxlen - p, ":%*pbl",
 			       nodemask_pr_args(&nodes));
 }
+
+/**
+ * mpol_create - build mempolicy based on mode, nmask and maxnode
+ * @mode:  policy mode, as in MPOL_MODE_FLAGS
+ * @nmask:  node mask from userspace
+ * @maxnode:  number of valid bits in nmask
+ *
+ * Will allocate a new struct mempolicy that has to be released with
+ * mpol_put. Will also take and release the write lock mmap_lock in current->mm.
+ */
+struct mempolicy *mpol_create(
+	unsigned long mode, const unsigned long __user *nmask, unsigned long maxnode)
+{
+	int err;
+	unsigned short mode_flags;
+	nodemask_t nodes;
+	int lmode = mode;
+	struct mempolicy *mpol;
+
+	err = sanitize_mpol_flags(&lmode, &mode_flags);
+	if (err)
+		return ERR_PTR(err);
+
+	err = get_nodes(&nodes, nmask, maxnode);
+	if (err)
+		return ERR_PTR(err);
+
+	mpol = mpol_new(mode, mode_flags, &nodes);
+	if (IS_ERR(mpol))
+		return mpol;
+
+	err = mpol_init_from_nodemask(mpol, &nodes, true);
+	if (err) {
+		mpol_put(mpol);
+		return ERR_PTR(err);
+	}
+
+	return mpol;
+}
