@@ -963,6 +963,17 @@ void vm_mem_add(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
 	if (alignment > 1)
 		region->mmap_size += alignment;
 
+	/*
+	 * Update mmap_size based on actual allocation for
+	 * accuracy. e.g. munmap/ftruncate requires this update to
+	 * succeed
+	 */
+	if (is_backing_src_hugetlb(src_type) ||
+	    src_type == VM_MEM_SRC_SHARED_HUGETLB) {
+		region->mmap_size =
+			align_up(region->mmap_size, backing_src_pagesz);
+	}
+
 	region->fd = -1;
 	if (backing_src_is_shared(src_type))
 		region->fd = kvm_memfd_alloc(region->mmap_size,
