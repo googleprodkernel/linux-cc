@@ -166,11 +166,13 @@ int hugetlb_mcopy_atomic_pte(struct mm_struct *dst_mm, pte_t *dst_pte,
 				struct page **pagep,
 				bool wp_copy);
 #endif /* CONFIG_USERFAULTFD */
-bool hugetlb_reserve_pages(struct inode *inode, long from, long to,
-						struct vm_area_struct *vma,
-						vm_flags_t vm_flags);
-long hugetlb_unreserve_pages(struct inode *inode, long start, long end,
-						long freed);
+bool hugetlb_reserve_pages(struct hstate *h, struct hugepage_subpool *spool,
+			   struct inode *inode,
+			   long from, long to,
+			   struct vm_area_struct *vma,
+			   vm_flags_t vm_flags);
+long hugetlb_unreserve_pages(struct hstate *h, struct hugepage_subpool *spool,
+			     struct inode *inode, long start, long end, long freed);
 bool isolate_hugetlb(struct folio *folio, struct list_head *list);
 int get_hwpoison_hugetlb_folio(struct folio *folio, bool *hugetlb, bool unpoison);
 int get_huge_page_for_hwpoison(unsigned long pfn, int flags,
@@ -178,7 +180,7 @@ int get_huge_page_for_hwpoison(unsigned long pfn, int flags,
 void folio_putback_active_hugetlb(struct folio *folio);
 void move_hugetlb_state(struct folio *old_folio, struct folio *new_folio, int reason);
 void free_huge_page(struct page *page);
-void hugetlb_fix_reserve_counts(struct inode *inode);
+void hugetlb_fix_reserve_counts(struct hstate *h, struct hugepage_subpool *spool);
 extern struct mutex *hugetlb_fault_mutex_table;
 u32 hugetlb_fault_mutex_hash(struct address_space *mapping, pgoff_t idx);
 
@@ -259,6 +261,9 @@ void hugetlb_unshare_all_pmds(struct vm_area_struct *vma);
 void hugetlb_zero_partial_page(struct hstate *h, struct address_space *mapping,
 			       loff_t start, loff_t end);
 
+void remove_mapping_hugepages(struct address_space *mapping,
+			      struct hstate *h, struct hugepage_subpool *spool,
+			      struct inode *inode, loff_t lstart, loff_t lend);
 void remove_inode_hugepages(struct inode *inode, loff_t lstart, loff_t lend);
 
 #else /* !CONFIG_HUGETLB_PAGE */
@@ -472,6 +477,9 @@ static inline void hugetlb_unshare_all_pmds(struct vm_area_struct *vma) { }
 static inline void hugetlb_zero_partial_page(
 	struct hstate *h, struct address_space *mapping, loff_t start, loff_t end) {}
 
+static inline void remove_mapping_hugepages(
+	struct address_space *mapping, struct hstate *h, struct hugepage_subpool *spool,
+	struct inode *inode, loff_t lstart, loff_t lend) {}
 static inline void remove_inode_hugepages(struct inode *inode, loff_t lstart, loff_t lend) {}
 
 #endif /* !CONFIG_HUGETLB_PAGE */
@@ -554,6 +562,12 @@ static inline struct hstate *hstate_inode(struct inode *i)
 {
 	return HUGETLBFS_SB(i->i_sb)->hstate;
 }
+
+static inline struct hugepage_subpool *subpool_inode(struct inode *inode)
+{
+	return HUGETLBFS_SB(inode->i_sb)->spool;
+}
+
 #else /* !CONFIG_HUGETLBFS */
 
 #define is_file_hugepages(file)			false
@@ -568,6 +582,12 @@ static inline struct hstate *hstate_inode(struct inode *i)
 {
 	return NULL;
 }
+
+static inline struct hugepage_subpool *subpool_inode(struct inode *inode)
+{
+	return NULL;
+}
+
 #endif /* !CONFIG_HUGETLBFS */
 
 #ifdef HAVE_ARCH_HUGETLB_UNMAPPED_AREA
