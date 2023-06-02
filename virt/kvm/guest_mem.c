@@ -93,6 +93,11 @@ static struct folio *kvm_gmem_get_folio(struct file *file, pgoff_t index)
 
 	folio_mark_accessed(folio);
 	folio_mark_dirty(folio);
+
+	/*
+	 * Indicate that this folio matches the backing store (in this case, has
+	 * been initialized with zeroes)
+	 */
 	folio_mark_uptodate(folio);
 
 	return folio;
