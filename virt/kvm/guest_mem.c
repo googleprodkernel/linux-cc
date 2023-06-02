@@ -91,7 +91,14 @@ static struct folio *kvm_gmem_get_folio(struct file *file, pgoff_t index)
 			clear_highpage(folio_page(folio, i));
 	}
 
-	folio_mark_accessed(folio);
+	/*
+	 * filemap_grab_folio() uses FGP_ACCESSED, which already called
+	 * folio_mark_accessed(), so we clear it.
+	 * TODO: Should we instead be clearing this when truncating?
+	 * TODO: maybe don't use FGP_ACCESSED at all and call __filemap_get_folio directly.
+	 */
+	folio_clear_referenced(folio);
+
 	folio_mark_dirty(folio);
 
 	/*
