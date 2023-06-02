@@ -243,16 +243,12 @@ static void *__test_mem_conversions(void *__vcpu)
 static void test_mem_conversions(enum vm_mem_backing_src_type src_type, uint32_t nr_vcpus,
 				 uint32_t nr_memslots)
 {
-	/*
-	 * Allocate enough memory so that each vCPU's chunk of memory can be
-	 * naturally aligned with respect to the size of the backing store.
-	 */
-	const size_t size = align_up(PER_CPU_DATA_SIZE, get_backing_src_pagesz(src_type));
-	const size_t memfd_size = size * nr_vcpus;
+	const size_t memfd_size = PER_CPU_DATA_SIZE * nr_vcpus;
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
 	pthread_t threads[KVM_MAX_VCPUS];
 	struct kvm_vm *vm;
 	int memfd, i, r;
+	size_t test_unit_size;
 
 	const struct vm_shape shape = {
 		.mode = VM_MODE_DEFAULT,
@@ -263,18 +259,44 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type, uint32_t
 
 	vm_enable_cap(vm, KVM_CAP_EXIT_HYPERCALL, (1 << KVM_HC_MAP_GPA_RANGE));
 
+	/*
+	 * Keep test units contiguous in memory by setting GPAs contiguously so
+	 * that we can test having multiple VCPUs write to the same hugepage
+	 * when a single memslot is used.
+	 */
+	test_unit_size = PER_CPU_DATA_SIZE;
+	if (nr_memslots > 1) {
+		/*
+		 * Allocate enough memory so that each vCPU's chunk of memory can be
+		 * naturally aligned with respect to the size of the backing store.
+		 */
+		test_unit_size = align_up(PER_CPU_DATA_SIZE, get_backing_src_pagesz(src_type));
+	}
+
 	memfd = vm_create_guest_memfd(vm, memfd_size, 0);
-	for (i = 0; i < nr_memslots; i++)
-		vm_mem_add(vm, src_type, BASE_DATA_GPA + size * i,
-			   BASE_DATA_SLOT + i, size / vm->page_size,
-			   KVM_MEM_PRIVATE, memfd, size * i);
+	for (i = 0; i < nr_memslots; i++) {
+		uint64_t gpa =  BASE_DATA_GPA + i * test_unit_size;
+		uint64_t npages = PER_CPU_DATA_SIZE / vm->page_size;
+
+		/* Make sure the memslot is large enough for all the test units */
+		if (nr_memslots == 1)
+			npages *= nr_vcpus;
+
+		vm_mem_add(vm, src_type, gpa,
+			   BASE_DATA_SLOT + i, npages,
+			   KVM_MEM_PRIVATE, memfd, PER_CPU_DATA_SIZE * i);
+	}
 
 	for (i = 0; i < nr_vcpus; i++) {
-		uint64_t gpa =  BASE_DATA_GPA + i * size;
+		uint64_t gpa =  BASE_DATA_GPA + i * test_unit_size;
 
 		vcpu_args_set(vcpus[i], 1, gpa);
 
-		virt_map(vm, gpa, gpa, size / vm->page_size);
+		/*
+		 * Map just enough for each test unit (unadjusted
+		 * PER_CPU_DATA_SIZE)
+		 */
+		virt_map(vm, gpa, gpa, PER_CPU_DATA_SIZE / vm->page_size);
 
 		pthread_create(&threads[i], NULL, __test_mem_conversions, vcpus[i]);
 	}
