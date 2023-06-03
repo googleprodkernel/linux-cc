@@ -189,7 +189,8 @@ static long kvm_gmem_allocate(struct file *file, loff_t offset, loff_t len)
 	filemap_invalidate_lock_shared(mapping);
 
 	start = offset >> PAGE_SHIFT;
-	end = (offset + len) >> PAGE_SHIFT;
+	/* Align so that at least 1 page is allocated */
+	end = ALIGN(offset + len, PAGE_SIZE) >> PAGE_SHIFT;
 
 	r = 0;
 	for (index = start; index < end; ) {
