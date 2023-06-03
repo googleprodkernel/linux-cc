@@ -285,6 +285,8 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 	memfd_size = pmem_aligned_size * nr_vcpus;
 	memfd = vm_create_guest_memfd(vm, memfd_size,
 				      vm_pmem_backing_src_alias(pmem_src_type)->flag);
+
+	printf("Using %d memslot%s:\n", nr_memslots, nr_memslots == 1 ? "" : "s");
 	for (i = 0; i < nr_memslots; i++) {
 		uint64_t gpa =  BASE_DATA_GPA + i * test_unit_size;
 		uint64_t npages = pmem_aligned_size / vm->page_size;
@@ -293,14 +295,21 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type,
 		if (nr_memslots == 1)
 			npages *= nr_vcpus;
 
+		printf("  memslot: %d, gpa: 0x%lx, npages: 0x%lx, fd: %d (file size: 0x%lx), offset: 0x%lx\n",
+		       BASE_DATA_SLOT + i, gpa, npages, memfd, memfd_size, pmem_aligned_size * i);
+
 		/* Offsets must be aligned to private mem's page size */
 		vm_mem_add(vm, src_type, gpa,
 			   BASE_DATA_SLOT + i, npages,
 			   KVM_MEM_PRIVATE, memfd, pmem_aligned_size * i);
 	}
 
+	printf("Setting up %d test unit%s:\n", nr_vcpus, nr_vcpus == 1 ? "" : "s");
 	for (i = 0; i < nr_vcpus; i++) {
 		uint64_t gpa =  BASE_DATA_GPA + i * test_unit_size;
+
+		printf("  test unit %d: gpa_base: 0x%lx, size: 0x%lx\n",
+		       i, gpa, PER_CPU_DATA_SIZE);
 
 		vcpu_args_set(vcpus[i], 1, gpa);
 
