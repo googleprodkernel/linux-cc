@@ -1195,9 +1195,9 @@ void vm_mem_map_shared_or_private(struct kvm_vm *vm, uint64_t gpa,
 	mode = FALLOC_FL_KEEP_SIZE | (map_shared ? FALLOC_FL_PUNCH_HOLE : 0);
 
 	ret = fallocate(region->region.gmem_fd, mode, fd_offset, size);
-	TEST_ASSERT(!ret, "fallocate() failed to map %lx[%lu] %s, fd = %d, mode = %x, offset = %lx\n",
-		     gpa, size, map_shared ? "shared" : "private",
-		     region->region.gmem_fd, mode, fd_offset);
+	TEST_ASSERT(!ret, "fallocate() failed to map %lx[%lu] %s, fd = %d, offset = %lx, size = %lx\n",
+		    gpa, size, map_shared ? "shared" : "private",
+		    region->region.gmem_fd, fd_offset, size);
 
 	vm_set_memory_attributes(vm, gpa, size,
 				 map_shared ? 0 : KVM_MEMORY_ATTRIBUTE_PRIVATE);
