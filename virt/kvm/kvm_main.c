@@ -1989,7 +1989,7 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	if (mem->flags & KVM_MEM_PRIVATE &&
 	    (mem->gmem_offset & (PAGE_SIZE - 1) ||
 	     mem->gmem_offset + mem->memory_size < mem->gmem_offset ||
-	     0 /* TODO: require gfn be aligned with restricted offset */))
+	     !kvm_gmem_check_alignment(mem)))
 		return -EINVAL;
 	if (as_id >= kvm_arch_nr_memslot_as_ids(kvm) || id >= KVM_MEM_SLOTS_NUM)
 		return -EINVAL;

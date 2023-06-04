@@ -44,6 +44,7 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *gmem);
 int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 		  unsigned int fd, loff_t offset);
 void kvm_gmem_unbind(struct kvm_memory_slot *slot);
+bool kvm_gmem_check_alignment(const struct kvm_userspace_memory_region2 *mem);
 #else
 static inline int kvm_gmem_init(void)
 {
@@ -72,6 +73,11 @@ static inline int kvm_gmem_bind(struct kvm *kvm,
 static inline void kvm_gmem_unbind(struct kvm_memory_slot *slot)
 {
 	WARN_ON_ONCE(1);
+}
+
+static inline bool kvm_gmem_check_alignment(const struct kvm_userspace_memory_region2 *mem)
+{
+	return false;
 }
 #endif /* CONFIG_KVM_PRIVATE_MEM */
 

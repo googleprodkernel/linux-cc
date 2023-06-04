@@ -622,3 +622,28 @@ void kvm_gmem_exit(void)
 	kern_unmount(kvm_gmem_mnt);
 	kvm_gmem_mnt = NULL;
 }
+
+/**
+ * Return true if offset and size are page size aligned according to the type of
+ * backing pages requested.
+ *
+ * Offset must be page size aligned because KVM assumes that GFNs and PFNs must
+ * be at the same index within large pages (see VM_BUG_ON((fault->gfn & mask) !=
+ * (fault->pfn & mask)); in arch/x86/kvm/mmu/mmu.c).
+ *
+ * Size must be aligned because pages are allocated at page granularity. If size
+ * is smaller than page size, the allocator will be allocating past the end of
+ * the size of the memslot.
+ */
+bool kvm_gmem_check_alignment(const struct kvm_userspace_memory_region2 *mem)
+{
+	size_t page_size;
+
+	if (mem->flags & KVM_GUEST_MEMFD_HUGE_PMD)
+		page_size = HPAGE_PMD_SIZE;
+	else
+		page_size = PAGE_SIZE;
+
+	return (IS_ALIGNED(mem->gmem_offset, page_size) &&
+		IS_ALIGNED(mem->memory_size, page_size));
+}
