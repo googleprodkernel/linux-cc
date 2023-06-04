@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2022, Google LLC.
+ *
+ * This test uses double allocation - it does not free shared memory on
+ * conversion to private. Hence, the test machine should be configured with
+ * twice the number of hugetlb pages you intend to use.
+ *
+ * e.g. for 4 test units (nr_vcpus = 4), you'll need
+ * + 8 1G pages to support the test setup where 1G hugetlb pages are used for
+ *   both private and shared memory.
+ * + 4 1G pages and 8192 2M pages to support the test setup where 1G hugetlb
+ *   pages are used for private memory and 2M pages are used for shared memory.
  */
 #define _GNU_SOURCE /* for program_invocation_short_name */
 #include <fcntl.h>
