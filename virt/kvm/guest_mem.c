@@ -450,11 +450,112 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *gmem)
 	return fd;
 }
 
-int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
-		  unsigned int fd, loff_t offset)
+/**
+ * Binds a guest mem file to the memslot @slot
+ * @kvm: The kvm requesting binding of memslot's gmem file
+ *
+ * "Binding" means recording in the file that a memslot is using certain ranges
+ * in the file. Since memslots don't have a reference to the containing kvm, we
+ * also have to store the kvm pointer.
+ *
+ * guest mem files are defined to be used only for a single kvm, hence all
+ * bindings in this file can share a single kvm pointer.
+ *
+ * Returns 0 on success or negated error.
+ */
+static int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot)
 {
+	int ret;
 	unsigned long start, end;
+	struct file *file;
 	struct kvm_gmem *gmem;
+	struct kvm_memory_slot *existing_slot;
+
+	file = slot->gmem.file;
+	gmem = file->private_data;
+
+	start = slot->gmem.index;
+
+	/*
+	 * This check for an existing slot can use only the start of the
+	 * memslot, without checking the entire range of the memslot. This
+	 * relies on the tight coupling between guest mem and memslots, and that
+	 * memslots are already checked for non-overlapping ranges.
+	 */
+	existing_slot = xa_load(&gmem->bindings, start);
+	if (existing_slot) {
+		if (existing_slot == slot)
+			return 0;
+		else
+			return -EIO;
+	}
+
+	filemap_invalidate_lock(file->f_mapping);
+
+	ret = -EIO;
+
+	/* A gmem file can only be bound to the same kvm */
+	if (gmem->kvm) {
+		if (gmem->kvm != kvm)
+			goto out;
+	} else {
+		kvm_get_kvm(kvm);
+		gmem->kvm = kvm;
+	}
+
+	end = start + slot->npages;
+	xa_store_range(&gmem->bindings, start, end - 1, slot, GFP_KERNEL);
+
+	ret = 0;
+
+out:
+	filemap_invalidate_unlock(file->f_mapping);
+
+	return ret;
+}
+
+/**
+ * Unbinds a guest mem file from the memslot @slot: undo kvm_gmem_bind()
+ *
+ * Removal of page mappings in guest (zapping PTEs) is not performed when
+ * unbinding.  Page tables and memory contents are cleared by punching holes.
+ */
+static void kvm_gmem_unbind(struct kvm_memory_slot *slot)
+{
+	unsigned long start = slot->gmem.index;
+	unsigned long end = start + slot->npages;
+	struct kvm_gmem *gmem;
+	struct file *file;
+	struct kvm_memory_slot *existing_slot;
+
+	file = slot->gmem.file;
+	gmem = file->private_data;
+
+	/* existing_slot != slot if bindings were migrated to another VM */
+	existing_slot = xa_load(&gmem->bindings, start);
+	if (!existing_slot || existing_slot != slot)
+		return;
+
+	filemap_invalidate_lock(file->f_mapping);
+
+	xa_store_range(&gmem->bindings, start, end - 1, NULL, GFP_KERNEL);
+
+	if (xa_empty(&gmem->bindings)) {
+		kvm_put_kvm(gmem->kvm);
+		gmem->kvm = NULL;
+	}
+
+	filemap_invalidate_unlock(file->f_mapping);
+}
+
+/**
+ * Initialize memslot by storing file and offset in the memslot @slot.
+ *
+ * Returns 0 on success or negated error.
+ */
+int kvm_gmem_init_memslot(struct kvm_memory_slot *slot, unsigned int fd, loff_t offset)
+{
+	int ret;
 	struct file *file;
 
 	BUILD_BUG_ON(sizeof(gfn_t) != sizeof(slot->gmem.index));
@@ -466,74 +567,39 @@ int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 	if (!file)
 		return -EINVAL;
 
+	ret = -EINVAL;
 	if (file->f_op != &kvm_gmem_fops)
-		goto err;
-
-	gmem = file->private_data;
-	if (gmem->kvm != kvm)
-		goto err;
+		goto out;
 
 	if (offset + (slot->npages << PAGE_SHIFT) > kvm_gmem_get_size(file))
-		goto err;
+		goto out;
 
-	filemap_invalidate_lock(file->f_mapping);
+	/* Each memslot holds a refcount on file */
+	slot->gmem.file = file;
+	slot->gmem.index = offset >> PAGE_SHIFT;
 
-	start = offset >> PAGE_SHIFT;
-	end = start + slot->npages;
-
-	if (!xa_empty(&gmem->bindings) &&
-	    xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT)) {
-		filemap_invalidate_unlock(file->f_mapping);
-		goto err;
-	}
-
-	/*
-	 * No synchronize_rcu() needed, any in-flight readers are guaranteed to
-	 * be see either a NULL file or this new file, no need for them to go
-	 * away.
-	 */
-	rcu_assign_pointer(slot->gmem.file, file);
-	slot->gmem.index = start;
-
-	xa_store_range(&gmem->bindings, start, end - 1, slot, GFP_KERNEL);
-	filemap_invalidate_unlock(file->f_mapping);
-
-	/*
-	 * Drop the reference to the file, even on success.  The file pins KVM,
-	 * not the other way 'round.  Active bindings are invalidated if the
-	 * file is closed before memslots are destroyed.
-	 */
-	fput(file);
 	return 0;
 
-err:
+out:
 	fput(file);
-	return -EINVAL;
+	return ret;
 }
 
-void kvm_gmem_unbind(struct kvm_memory_slot *slot)
+/**
+ * Destroy memslot @slot
+ *
+ * + Unbind the memslot
+ * + Undo kvm_gmem_init_memslot()
+ *
+ * Returns 0 on success or negated error.
+ */
+void kvm_gmem_destroy_memslot(struct kvm_memory_slot *slot)
 {
-	unsigned long start = slot->gmem.index;
-	unsigned long end = start + slot->npages;
-	struct kvm_gmem *gmem;
-	struct file *file;
+	kvm_gmem_unbind(slot);
 
-	/* Nothing to do if the underlying file was already closed (or is being
-	 * close right now), kvm_gmem_release() invalidates all bindings.
-	 */
-	file = kvm_gmem_get_file(slot);
-	if (!file)
-		return;
-
-	gmem = file->private_data;
-
-	filemap_invalidate_lock(file->f_mapping);
-	xa_store_range(&gmem->bindings, start, end - 1, NULL, GFP_KERNEL);
-	rcu_assign_pointer(slot->gmem.file, NULL);
-	synchronize_rcu();
-	filemap_invalidate_unlock(file->f_mapping);
-
-	fput(file);
+	fput(slot->gmem.file);
+	slot->gmem.file = NULL;
+	slot->gmem.index = 0;
 }
 
 int kvm_gmem_get_pfn(struct kvm *kvm, struct kvm_memory_slot *slot,
