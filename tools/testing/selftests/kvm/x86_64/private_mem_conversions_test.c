@@ -310,9 +310,8 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type, uint32_t
 
 	/*
 	 * Allocate and free memory from the guest_memfd after closing the VM
-	 * fd.  The guest_memfd is gifted a reference to its owning VM, i.e.
-	 * should prevent the VM from being fully destroyed until the last
-	 * reference to the guest_memfd is also put.
+	 * fd.  This should still work as expected, without involving the closed
+	 * VM at all.
 	 */
 	r = fallocate(memfd, FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE, 0, memfd_size);
 	TEST_ASSERT(!r, __KVM_SYSCALL_ERROR("fallocate()", r));
