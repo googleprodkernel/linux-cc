@@ -981,7 +981,7 @@ static void kvm_destroy_dirty_bitmap(struct kvm_memory_slot *memslot)
 static void kvm_free_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
 {
 	if (slot->flags & KVM_MEM_PRIVATE)
-		kvm_gmem_unbind(slot);
+		kvm_gmem_destroy_memslot(slot);
 
 	kvm_destroy_dirty_bitmap(slot);
 
@@ -2061,20 +2061,17 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	new->flags = mem->flags;
 	new->userspace_addr = mem->userspace_addr;
 	if (mem->flags & KVM_MEM_PRIVATE) {
-		r = kvm_gmem_bind(kvm, new, mem->gmem_fd, mem->gmem_offset);
+		r = kvm_gmem_init_memslot(new, mem->gmem_fd, mem->gmem_offset);
 		if (r)
 			goto out;
 	}
 
 	r = kvm_set_memslot(kvm, old, new, change);
 	if (r)
-		goto out_restricted;
+		goto out;
 
 	return 0;
 
-out_restricted:
-	if (mem->flags & KVM_MEM_PRIVATE)
-		kvm_gmem_unbind(new);
 out:
 	kfree(new);
 	return r;
