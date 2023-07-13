@@ -505,12 +505,6 @@ int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 	xa_store_range(&gmem->bindings, start, end - 1, slot, GFP_KERNEL);
 	filemap_invalidate_unlock(file->f_mapping);
 
-	/*
-	 * Drop the reference to the file, even on success.  The file pins KVM,
-	 * not the other way 'round.  Active bindings are invalidated if the
-	 * file is closed before memslots are destroyed.
-	 */
-	fput(file);
 	return 0;
 
 err:
@@ -523,14 +517,7 @@ void kvm_gmem_unbind(struct kvm_memory_slot *slot)
 	unsigned long start = slot->gmem.index;
 	unsigned long end = start + slot->npages;
 	struct kvm_gmem *gmem;
-	struct file *file;
-
-	/* Nothing to do if the underlying file was already closed (or is being
-	 * close right now), kvm_gmem_release() invalidates all bindings.
-	 */
-	file = kvm_gmem_get_file(slot);
-	if (!file)
-		return;
+	struct file *file = rcu_dereference(slot->gmem.file);
 
 	gmem = file->private_data;
 
