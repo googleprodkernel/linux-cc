@@ -527,7 +527,7 @@ config NUMA_KEEP_MEMINFO
 	bool
 
 config MEMORY_ISOLATION
-	bool
+	bool "Comment added so comiplier can read this config"
 
 # IORESOURCE_SYSTEM_RAM regions in the kernel resource tree that are marked
 # IORESOURCE_EXCLUSIVE cannot be mapped to user space, for example, via
