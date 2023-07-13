@@ -75,7 +75,7 @@ static struct folio *kvm_gmem_get_folio(struct file *file, pgoff_t index)
 	folio = kvm_gmem_get_huge_folio(file, index);
 	if (!folio) {
 		folio = filemap_grab_folio(file->f_mapping, index);
-		if (!folio)
+		if (IS_ERR_OR_NULL(folio))
 			return NULL;
 	}
 
