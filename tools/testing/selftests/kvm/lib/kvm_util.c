@@ -1388,17 +1388,37 @@ va_found:
 	return pgidx_start * vm->page_size;
 }
 
+/*
+ * VM Virtual Address Allocate Shared/Encrypted
+ *
+ * Input Args:
+ *   vm - Virtual Machine
+ *   sz - Size in bytes
+ *   vaddr_min - Minimum starting virtual address
+ *   paddr_min - Minimum starting physical address
+ *   data_memslot - memslot number to allocate in
+ *   encrypt - Whether the region should be handled as encrypted
+ *
+ * Output Args: None
+ *
+ * Return:
+ *   Starting guest virtual address
+ *
+ * Allocates at least sz bytes within the virtual address space of the vm
+ * given by vm.  The allocated bytes are mapped to a virtual address >=
+ * the address given by vaddr_min.  Note that each allocation uses a
+ * a unique set of pages, with the minimum real allocation being at least
+ * a page.
+ */
 static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
-				     vm_vaddr_t vaddr_min,
-				     enum kvm_mem_region_type type,
-				     bool encrypt)
+				     vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
+				     uint32_t data_memslot, bool encrypt)
 {
 	uint64_t pages = (sz >> vm->page_shift) + ((sz % vm->page_size) != 0);
 
 	virt_pgd_alloc(vm);
-	vm_paddr_t paddr = _vm_phy_pages_alloc(vm, pages,
-					      KVM_UTIL_MIN_PFN * vm->page_size,
-					      vm->memslots[type], encrypt);
+	vm_paddr_t paddr = _vm_phy_pages_alloc(vm, pages, paddr_min,
+					       data_memslot, encrypt);
 
 	/*
 	 * Find an unused range of virtual page addresses of at least
@@ -1408,8 +1428,7 @@ static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
 
 	/* Map the virtual pages. */
 	for (vm_vaddr_t vaddr = vaddr_start; pages > 0;
-		pages--, vaddr += vm->page_size, paddr += vm->page_size) {
-
+	     pages--, vaddr += vm->page_size, paddr += vm->page_size) {
 		virt_pg_map(vm, vaddr, paddr);
 
 		sparsebit_set(vm->vpages_mapped, vaddr >> vm->page_shift);
@@ -1421,12 +1440,16 @@ static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
 vm_vaddr_t __vm_vaddr_alloc(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min,
 			    enum kvm_mem_region_type type)
 {
-	return ____vm_vaddr_alloc(vm, sz, vaddr_min, type, vm->protected);
+	return ____vm_vaddr_alloc(vm, sz, vaddr_min,
+				  KVM_UTIL_MIN_PFN * vm->page_size,
+				  vm->memslots[type], vm->protected);
 }
 
 vm_vaddr_t vm_vaddr_alloc_shared(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min)
 {
-	return ____vm_vaddr_alloc(vm, sz, vaddr_min, MEM_REGION_TEST_DATA, false);
+	return ____vm_vaddr_alloc(vm, sz, vaddr_min,
+				  KVM_UTIL_MIN_PFN * vm->page_size,
+				  vm->memslots[MEM_REGION_TEST_DATA], false);
 }
 
 /*
@@ -1451,6 +1474,26 @@ vm_vaddr_t vm_vaddr_alloc_shared(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_
 vm_vaddr_t vm_vaddr_alloc(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min)
 {
 	return __vm_vaddr_alloc(vm, sz, vaddr_min, MEM_REGION_TEST_DATA);
+}
+
+/**
+ * Allocate memory in @vm of size @sz in memslot with id @data_memslot,
+ * beginning with the desired address of @vaddr_min.
+ *
+ * If there isn't enough memory at @vaddr_min, find the next possible address
+ * that can meet the requested size in the given memslot.
+ *
+ * Return the address where the memory is allocated.
+ */
+vm_vaddr_t vm_vaddr_alloc_1to1(struct kvm_vm *vm, size_t sz,
+			       vm_vaddr_t vaddr_min, uint32_t data_memslot)
+{
+	vm_vaddr_t gva = ____vm_vaddr_alloc(vm, sz, vaddr_min,
+					    (vm_paddr_t)vaddr_min, data_memslot,
+					    vm->protected);
+	TEST_ASSERT_EQ(gva, addr_gva2gpa(vm, gva));
+
+	return gva;
 }
 
 /*
