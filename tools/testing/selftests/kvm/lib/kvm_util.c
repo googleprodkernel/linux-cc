@@ -1410,9 +1410,9 @@ va_found:
  * a unique set of pages, with the minimum real allocation being at least
  * a page.
  */
-static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
-				     vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
-				     uint32_t data_memslot, bool encrypt)
+vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
+			      vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
+			      uint32_t data_memslot, bool encrypt)
 {
 	uint64_t pages = (sz >> vm->page_shift) + ((sz % vm->page_size) != 0);
 
