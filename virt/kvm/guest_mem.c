@@ -365,12 +365,42 @@ static const struct inode_operations kvm_gmem_iops = {
 	.setattr	= kvm_gmem_setattr,
 };
 
+static struct file *kvm_gmem_alloc_file(struct kvm *kvm, struct inode *inode,
+					struct vfsmount *mnt)
+{
+	struct file *file;
+	struct kvm_gmem *gmem;
+
+	gmem = kzalloc(sizeof(*gmem), GFP_KERNEL);
+	if (!gmem)
+		return ERR_PTR(-ENOMEM);
+
+	file = alloc_file_pseudo(inode, mnt, "kvm-gmem", O_RDWR, &kvm_gmem_fops);
+	if (IS_ERR(file))
+		goto err;
+
+	file->f_flags |= O_LARGEFILE;
+	file->f_mapping = inode->i_mapping;
+
+	kvm_get_kvm(kvm);
+	gmem->kvm = kvm;
+	xa_init(&gmem->bindings);
+
+	file->private_data = gmem;
+
+	list_add(&gmem->entry, &inode->i_mapping->private_list);
+
+	return file;
+err:
+	kfree(gmem);
+	return file;
+}
+
 static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags,
 			     struct vfsmount *mnt)
 {
 	const char *anon_name = "[kvm-gmem]";
 	const struct qstr qname = QSTR_INIT(anon_name, strlen(anon_name));
-	struct kvm_gmem *gmem;
 	struct inode *inode;
 	struct file *file;
 	int fd, err;
@@ -399,34 +429,15 @@ static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags,
 		goto err_inode;
 	}
 
-	file = alloc_file_pseudo(inode, mnt, "kvm-gmem", O_RDWR, &kvm_gmem_fops);
+	file = kvm_gmem_alloc_file(kvm, inode, mnt);
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
 		goto err_fd;
 	}
 
-	file->f_flags |= O_LARGEFILE;
-	file->f_mapping = inode->i_mapping;
-
-	gmem = kzalloc(sizeof(*gmem), GFP_KERNEL);
-	if (!gmem) {
-		err = -ENOMEM;
-		goto err_file;
-	}
-
-	kvm_get_kvm(kvm);
-	gmem->kvm = kvm;
-	xa_init(&gmem->bindings);
-
-	file->private_data = gmem;
-
-	list_add(&gmem->entry, &inode->i_mapping->private_list);
-
 	fd_install(fd, file);
 	return fd;
 
-err_file:
-	fput(file);
 err_fd:
 	put_unused_fd(fd);
 err_inode:
