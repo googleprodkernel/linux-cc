@@ -41,6 +41,7 @@ static inline void gfn_to_pfn_cache_invalidate_start(struct kvm *kvm,
 int kvm_gmem_init(void);
 void kvm_gmem_exit(void);
 int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args);
+int kvm_gmem_link(struct kvm *kvm, struct kvm_link_guest_memfd *args);
 int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 		  unsigned int fd, loff_t offset);
 void kvm_gmem_unbind(struct kvm_memory_slot *slot);
@@ -57,6 +58,12 @@ static inline void kvm_gmem_exit(void)
 
 static inline int kvm_gmem_create(struct kvm *kvm,
 				  struct kvm_create_guest_memfd *args)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int kvm_gmem_link(struct kvm *kvm,
+				struct kvm_link_guest_memfd *args)
 {
 	return -EOPNOTSUPP;
 }

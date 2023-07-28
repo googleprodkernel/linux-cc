@@ -477,6 +477,79 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args)
 	return __kvm_gmem_create(kvm, size, flags, kvm_gmem_mnt);
 }
 
+static inline void __kvm_gmem_do_link(struct inode *inode)
+{
+	/* Refer to simple_link() */
+
+	inode->i_ctime = current_time(inode);
+	inc_nlink(inode);
+
+	/*
+	 * ihold() to add additional reference to inode for reference in dentry,
+	 * created in kvm_gmem_alloc_file() -> alloc_file_pseudo(). This is not
+	 * necessary when creating a new file because alloc_inode() creates
+	 * inodes with i_count = 1, which is the refcount for the dentry in the
+	 * file.
+	 */
+	ihold(inode);
+
+	/*
+	 * dget() and d_instantiate() complete the setup of a dentry, but those
+	 * have already been done in kvm_gmem_alloc_file() ->
+	 * alloc_file_pseudo()
+	 */
+}
+
+int kvm_gmem_link(struct kvm *kvm, struct kvm_link_guest_memfd *args)
+{
+	int ret;
+	int fd;
+	struct fd f;
+	struct kvm_gmem *gmem;
+	u64 flags = args->flags;
+	u64 valid_flags = 0;
+	struct inode *inode;
+	struct file *dst_file;
+
+	if (flags & ~valid_flags)
+		return -EINVAL;
+
+	f = fdget(args->fd);
+	if (!f.file)
+		return -EINVAL;
+
+	ret = -EINVAL;
+	if (f.file->f_op != &kvm_gmem_fops)
+		goto out;
+
+	/* Cannot link a gmem file with the same vm again */
+	gmem = f.file->private_data;
+	if (gmem->kvm == kvm)
+		goto out;
+
+	ret = fd = get_unused_fd_flags(0);
+	if (fd < 0)
+		goto out;
+
+	inode = file_inode(f.file);
+	dst_file = kvm_gmem_alloc_file(inode, kvm_gmem_mnt);
+	if (IS_ERR(dst_file)) {
+		ret = PTR_ERR(dst_file);
+		goto out_fd;
+	}
+
+	__kvm_gmem_do_link(inode);
+
+	fd_install(fd, dst_file);
+	return fd;
+
+out_fd:
+	put_unused_fd(fd);
+out:
+	fdput(f);
+	return ret;
+}
+
 int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 		  unsigned int fd, loff_t offset)
 {
