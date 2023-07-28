@@ -12,9 +12,9 @@
 static struct vfsmount *kvm_gmem_mnt;
 
 struct kvm_gmem {
-	struct kvm *kvm;
-	struct xarray bindings;
-	struct list_head entry;
+	struct kvm *kvm;         /* Pointer to kvm bound to this gmem file */
+	struct xarray bindings;  /* For tracking ranges in this file bound to memslots */
+	struct list_head entry;  /* For tracking of a gmem inodes' files */
 };
 
 static struct folio *kvm_gmem_get_huge_folio(struct inode *inode, pgoff_t index)
