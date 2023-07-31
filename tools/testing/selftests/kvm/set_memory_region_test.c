@@ -405,7 +405,7 @@ static void test_add_private_memory_region(void)
 	test_invalid_guest_memfd(vm, vm->fd, 0, "VM's fd should fail");
 
 	memfd = kvm_memfd_alloc(MEM_REGION_SIZE, false);
-	test_invalid_guest_memfd(vm, vm->fd, 0, "Regular memfd() should fail");
+	test_invalid_guest_memfd(vm, memfd, 0, "Regular memfd() should fail");
 	close(memfd);
 
 	vm2 = vm_create_barebones_protected_vm();
