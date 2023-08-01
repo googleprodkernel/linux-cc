@@ -137,6 +137,47 @@ static void test_create_guest_memfd_invalid(struct kvm_vm *vm)
 	}
 }
 
+static void test_link(struct kvm_vm *src_vm, int src_fd, size_t total_size)
+{
+	int ret;
+	int dst_fd;
+	struct kvm_vm *dst_vm;
+	struct stat src_stat;
+	struct stat dst_stat;
+
+	dst_vm = vm_create_barebones();
+
+	/* Linking with a nonexistent fd */
+	dst_fd = __vm_link_guest_memfd(dst_vm, 99, 0);
+	ASSERT_EQ(dst_fd, -1);
+	ASSERT_EQ(errno, EINVAL);
+
+	/* Linking with a non-gmem fd */
+	dst_fd = __vm_link_guest_memfd(dst_vm, 0, 1);
+	ASSERT_EQ(dst_fd, -1);
+	ASSERT_EQ(errno, EINVAL);
+
+	/* Linking with invalid flags */
+	dst_fd = __vm_link_guest_memfd(dst_vm, src_fd, 1);
+	ASSERT_EQ(dst_fd, -1);
+	ASSERT_EQ(errno, EINVAL);
+
+	/* Linking with an already-associated vm */
+	dst_fd = __vm_link_guest_memfd(src_vm, src_fd, 1);
+	ASSERT_EQ(dst_fd, -1);
+	ASSERT_EQ(errno, EINVAL);
+
+	dst_fd = __vm_link_guest_memfd(dst_vm, src_fd, 0);
+	TEST_ASSERT(dst_vm > 0, "linking should succeed with valid inputs");
+	TEST_ASSERT(src_fd != dst_fd, "linking should return a different fd");
+
+	ret = fstat(src_fd, &src_stat);
+	ASSERT_EQ(ret, 0);
+	ret = fstat(dst_fd, &dst_stat);
+	ASSERT_EQ(ret, 0);
+	TEST_ASSERT(src_stat.st_ino == dst_stat.st_ino,
+		    "src and dst files should have the same inode number");
+}
 
 int main(int argc, char *argv[])
 {
@@ -158,6 +199,7 @@ int main(int argc, char *argv[])
 	test_mmap(fd, page_size);
 	test_file_size(fd, page_size, total_size);
 	test_fallocate(fd, page_size, total_size);
+	test_link(vm, fd, total_size);
 
 	close(fd);
 }
