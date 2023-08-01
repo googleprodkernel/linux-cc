@@ -4340,6 +4340,68 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 }
 EXPORT_SYMBOL_GPL(kvm_get_msr_common);
 
+int kvm_mark_migration_in_progress(struct kvm *dst_kvm, struct kvm *src_kvm)
+{
+	int r;
+
+	if (dst_kvm == src_kvm)
+		return -EINVAL;
+
+	/*
+	 * Bail if these VMs are already involved in a migration to avoid
+	 * deadlock between two VMs trying to migrate to/from each other.
+	 */
+	r = -EBUSY;
+	if (atomic_cmpxchg_acquire(&dst_kvm->migration_in_progress, 0, 1))
+		return r;
+
+	if (atomic_cmpxchg_acquire(&src_kvm->migration_in_progress, 0, 1))
+		goto release_dst;
+
+	return 0;
+
+release_dst:
+	atomic_set_release(&dst_kvm->migration_in_progress, 0);
+	return r;
+}
+EXPORT_SYMBOL_GPL(kvm_mark_migration_in_progress);
+
+void kvm_mark_migration_done(struct kvm *dst_kvm, struct kvm *src_kvm)
+{
+	atomic_set_release(&dst_kvm->migration_in_progress, 0);
+	atomic_set_release(&src_kvm->migration_in_progress, 0);
+}
+EXPORT_SYMBOL_GPL(kvm_mark_migration_done);
+
+int kvm_lock_two_vms(struct kvm *dst_kvm, struct kvm *src_kvm)
+{
+	int r;
+
+	if (dst_kvm == src_kvm)
+		return -EINVAL;
+
+	r = -EINTR;
+	if (mutex_lock_killable(&dst_kvm->lock))
+		return r;
+
+	if (mutex_lock_killable_nested(&src_kvm->lock, SINGLE_DEPTH_NESTING))
+		goto unlock_dst;
+
+	return 0;
+
+unlock_dst:
+	mutex_unlock(&dst_kvm->lock);
+	return r;
+}
+EXPORT_SYMBOL_GPL(kvm_lock_two_vms);
+
+void kvm_unlock_two_vms(struct kvm *dst_kvm, struct kvm *src_kvm)
+{
+	mutex_unlock(&dst_kvm->lock);
+	mutex_unlock(&src_kvm->lock);
+}
+EXPORT_SYMBOL_GPL(kvm_unlock_two_vms);
+
 /*
  * Read or write a bunch of msrs. All parameters are kernel addresses.
  *

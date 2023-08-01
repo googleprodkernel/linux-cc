@@ -539,4 +539,10 @@ int kvm_sev_es_string_io(struct kvm_vcpu *vcpu, unsigned int size,
 			 unsigned int port, void *data,  unsigned int count,
 			 int in);
 
+int kvm_mark_migration_in_progress(struct kvm *dst_kvm, struct kvm *src_kvm);
+void kvm_mark_migration_done(struct kvm *dst_kvm, struct kvm *src_kvm);
+
+int kvm_lock_two_vms(struct kvm *dst_kvm, struct kvm *src_kvm);
+void kvm_unlock_two_vms(struct kvm *dst_kvm, struct kvm *src_kvm);
+
 #endif
