@@ -6325,6 +6325,42 @@ int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_event,
 	return 0;
 }
 
+static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
+{
+	int r;
+	struct kvm *source_kvm;
+	struct fd f = fdget(source_fd);
+
+	r = -EBADF;
+	if (!f.file)
+		return r;
+
+	if (!file_is_kvm(f.file))
+		goto out_fdput;
+
+	r = -EINVAL;
+	source_kvm = f.file->private_data;
+	if (kvm->arch.vm_type != source_kvm->arch.vm_type)
+		goto out_fdput;
+
+	r = kvm_mark_migration_in_progress(kvm, source_kvm);
+	if (r)
+		goto out_fdput;
+
+	r = kvm_lock_two_vms(kvm, source_kvm);
+	if (r)
+		goto out_mark_migration_done;
+
+	r = static_call(kvm_x86_vm_move_enc_context_from)(kvm, source_kvm);
+
+	kvm_unlock_two_vms(kvm, source_kvm);
+out_mark_migration_done:
+	kvm_mark_migration_done(kvm, source_kvm);
+out_fdput:
+	fdput(f);
+	return r;
+}
+
 int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
 			    struct kvm_enable_cap *cap)
 {
@@ -6463,11 +6499,7 @@ split_irqchip_unlock:
 		r = static_call(kvm_x86_vm_copy_enc_context_from)(kvm, cap->args[0]);
 		break;
 	case KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM:
-		r = -EINVAL;
-		if (!kvm_x86_ops.vm_move_enc_context_from)
-			break;
-
-		r = static_call(kvm_x86_vm_move_enc_context_from)(kvm, cap->args[0]);
+		r = kvm_vm_move_enc_context_from(kvm, cap->args[0]);
 		break;
 	case KVM_CAP_EXIT_HYPERCALL:
 		if (cap->args[0] & ~KVM_EXIT_HYPERCALL_VALID_MASK) {

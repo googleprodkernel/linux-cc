@@ -721,7 +721,7 @@ int sev_mem_enc_register_region(struct kvm *kvm,
 int sev_mem_enc_unregister_region(struct kvm *kvm,
 				  struct kvm_enc_region *range);
 int sev_vm_copy_enc_context_from(struct kvm *kvm, unsigned int source_fd);
-int sev_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd);
+int sev_vm_move_enc_context_from(struct kvm *kvm, struct kvm *source_kvm);
 void sev_guest_memory_reclaimed(struct kvm *kvm);
 
 void pre_sev_run(struct vcpu_svm *svm, int cpu);
