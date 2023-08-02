@@ -80,20 +80,6 @@ static struct kvm_vm *aux_vm_create(bool with_vcpus)
 	return vm;
 }
 
-static int __sev_migrate_from(struct kvm_vm *dst, struct kvm_vm *src)
-{
-	return __vm_enable_cap(dst, KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM, src->fd);
-}
-
-
-static void sev_migrate_from(struct kvm_vm *dst, struct kvm_vm *src)
-{
-	int ret;
-
-	ret = __sev_migrate_from(dst, src);
-	TEST_ASSERT(!ret, "Migration failed, ret: %d, errno: %d\n", ret, errno);
-}
-
 static void test_sev_migrate_from(bool es)
 {
 	struct kvm_vm *src_vm;
@@ -105,13 +91,13 @@ static void test_sev_migrate_from(bool es)
 		dst_vms[i] = aux_vm_create(true);
 
 	/* Initial migration from the src to the first dst. */
-	sev_migrate_from(dst_vms[0], src_vm);
+	vm_migrate_from(dst_vms[0], src_vm);
 
 	for (i = 1; i < NR_MIGRATE_TEST_VMS; i++)
-		sev_migrate_from(dst_vms[i], dst_vms[i - 1]);
+		vm_migrate_from(dst_vms[i], dst_vms[i - 1]);
 
 	/* Migrate the guest back to the original VM. */
-	ret = __sev_migrate_from(src_vm, dst_vms[NR_MIGRATE_TEST_VMS - 1]);
+	ret = __vm_migrate_from(src_vm, dst_vms[NR_MIGRATE_TEST_VMS - 1]);
 	TEST_ASSERT(ret == -1 && errno == EIO,
 		    "VM that was migrated from should be dead. ret %d, errno: %d\n", ret,
 		    errno);
@@ -133,7 +119,7 @@ static void *locking_test_thread(void *arg)
 
 	for (i = 0; i < NR_LOCK_TESTING_ITERATIONS; ++i) {
 		j = i % NR_LOCK_TESTING_THREADS;
-		__sev_migrate_from(input->vm, input->source_vms[j]);
+		__vm_migrate_from(input->vm, input->source_vms[j]);
 	}
 
 	return NULL;
@@ -170,7 +156,7 @@ static void test_sev_migrate_parameters(void)
 
 	vm_no_vcpu = vm_create_barebones();
 	vm_no_sev = aux_vm_create(true);
-	ret = __sev_migrate_from(vm_no_vcpu, vm_no_sev);
+	ret = __vm_migrate_from(vm_no_vcpu, vm_no_sev);
 	TEST_ASSERT(ret == -1 && errno == EINVAL,
 		    "Migrations require SEV enabled. ret %d, errno: %d\n", ret,
 		    errno);
@@ -184,25 +170,25 @@ static void test_sev_migrate_parameters(void)
 	sev_ioctl(sev_es_vm_no_vmsa->fd, KVM_SEV_ES_INIT, NULL);
 	__vm_vcpu_add(sev_es_vm_no_vmsa, 1);
 
-	ret = __sev_migrate_from(sev_vm, sev_es_vm);
+	ret = __vm_migrate_from(sev_vm, sev_es_vm);
 	TEST_ASSERT(
 		ret == -1 && errno == EINVAL,
 		"Should not be able migrate to SEV enabled VM. ret: %d, errno: %d\n",
 		ret, errno);
 
-	ret = __sev_migrate_from(sev_es_vm, sev_vm);
+	ret = __vm_migrate_from(sev_es_vm, sev_vm);
 	TEST_ASSERT(
 		ret == -1 && errno == EINVAL,
 		"Should not be able migrate to SEV-ES enabled VM. ret: %d, errno: %d\n",
 		ret, errno);
 
-	ret = __sev_migrate_from(vm_no_vcpu, sev_es_vm);
+	ret = __vm_migrate_from(vm_no_vcpu, sev_es_vm);
 	TEST_ASSERT(
 		ret == -1 && errno == EINVAL,
 		"SEV-ES migrations require same number of vCPUS. ret: %d, errno: %d\n",
 		ret, errno);
 
-	ret = __sev_migrate_from(vm_no_vcpu, sev_es_vm_no_vmsa);
+	ret = __vm_migrate_from(vm_no_vcpu, sev_es_vm_no_vmsa);
 	TEST_ASSERT(
 		ret == -1 && errno == EINVAL,
 		"SEV-ES migrations require UPDATE_VMSA. ret %d, errno: %d\n",
@@ -355,14 +341,14 @@ static void test_sev_move_copy(void)
 
 	sev_mirror_create(mirror_vm, sev_vm);
 
-	sev_migrate_from(dst_mirror_vm, mirror_vm);
-	sev_migrate_from(dst_vm, sev_vm);
+	vm_migrate_from(dst_mirror_vm, mirror_vm);
+	vm_migrate_from(dst_vm, sev_vm);
 
-	sev_migrate_from(dst2_vm, dst_vm);
-	sev_migrate_from(dst2_mirror_vm, dst_mirror_vm);
+	vm_migrate_from(dst2_vm, dst_vm);
+	vm_migrate_from(dst2_mirror_vm, dst_mirror_vm);
 
-	sev_migrate_from(dst3_mirror_vm, dst2_mirror_vm);
-	sev_migrate_from(dst3_vm, dst2_vm);
+	vm_migrate_from(dst3_mirror_vm, dst2_mirror_vm);
+	vm_migrate_from(dst3_vm, dst2_vm);
 
 	kvm_vm_free(dst_vm);
 	kvm_vm_free(sev_vm);
@@ -384,8 +370,8 @@ static void test_sev_move_copy(void)
 
 	sev_mirror_create(mirror_vm, sev_vm);
 
-	sev_migrate_from(dst_mirror_vm, mirror_vm);
-	sev_migrate_from(dst_vm, sev_vm);
+	vm_migrate_from(dst_mirror_vm, mirror_vm);
+	vm_migrate_from(dst_vm, sev_vm);
 
 	kvm_vm_free(mirror_vm);
 	kvm_vm_free(dst_mirror_vm);

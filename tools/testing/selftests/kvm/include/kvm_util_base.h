@@ -331,6 +331,19 @@ static inline void vm_enable_cap(struct kvm_vm *vm, uint32_t cap, uint64_t arg0)
 	vm_ioctl(vm, KVM_ENABLE_CAP, &enable_cap);
 }
 
+static inline int __vm_migrate_from(struct kvm_vm *dst, struct kvm_vm *src)
+{
+	return __vm_enable_cap(dst, KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM, src->fd);
+}
+
+static inline void vm_migrate_from(struct kvm_vm *dst, struct kvm_vm *src)
+{
+	int ret;
+
+	ret = __vm_migrate_from(dst, src);
+	TEST_ASSERT(!ret, "Migration failed, ret: %d, errno: %d\n", ret, errno);
+}
+
 static inline void vm_set_memory_attributes(struct kvm_vm *vm, uint64_t gpa,
 					    uint64_t size, uint64_t attributes)
 {
