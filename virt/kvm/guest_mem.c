@@ -686,6 +686,31 @@ int kvm_gmem_get_pfn(struct kvm *kvm, struct kvm_memory_slot *slot,
 }
 EXPORT_SYMBOL_GPL(kvm_gmem_get_pfn);
 
+bool kvm_gmem_params_match(struct kvm_memory_slot *slot1,
+			   struct kvm_memory_slot *slot2)
+{
+	bool ret;
+	struct file *file1;
+	struct file *file2;
+
+	if (slot1->gmem.pgoff != slot2->gmem.pgoff)
+		return false;
+
+	file1 = kvm_gmem_get_file(slot1);
+	file2 = kvm_gmem_get_file(slot2);
+
+	ret = (file1 && file2 &&
+	       file_inode(file1) == file_inode(file2));
+
+	if (file1)
+		fput(file1);
+	if (file2)
+		fput(file2);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(kvm_gmem_params_match);
+
 static int kvm_gmem_init_fs_context(struct fs_context *fc)
 {
 	if (!init_pseudo(fc, GUEST_MEMORY_MAGIC))

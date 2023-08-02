@@ -4402,6 +4402,33 @@ void kvm_unlock_two_vms(struct kvm *dst_kvm, struct kvm *src_kvm)
 }
 EXPORT_SYMBOL_GPL(kvm_unlock_two_vms);
 
+static int kvm_lock_vm_memslots(struct kvm *dst_kvm, struct kvm *src_kvm)
+{
+	int r = -EINVAL;
+
+	if (dst_kvm == src_kvm)
+		return r;
+
+	r = -EINTR;
+	if (mutex_lock_killable(&dst_kvm->slots_lock))
+		return r;
+
+	if (mutex_lock_killable_nested(&src_kvm->slots_lock, SINGLE_DEPTH_NESTING))
+		goto unlock_dst;
+
+	return 0;
+
+unlock_dst:
+	mutex_unlock(&dst_kvm->slots_lock);
+	return r;
+}
+
+static void kvm_unlock_vm_memslots(struct kvm *dst_kvm, struct kvm *src_kvm)
+{
+	mutex_unlock(&src_kvm->slots_lock);
+	mutex_unlock(&dst_kvm->slots_lock);
+}
+
 /*
  * Read or write a bunch of msrs. All parameters are kernel addresses.
  *
@@ -6325,6 +6352,78 @@ int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_event,
 	return 0;
 }
 
+static bool memslot_configurations_match(struct kvm_memslots *src_slots,
+					 struct kvm_memslots *dst_slots)
+{
+	struct kvm_memslot_iter src_iter;
+	struct kvm_memslot_iter dst_iter;
+
+	kvm_for_each_memslot_pair(&src_iter, src_slots, &dst_iter, dst_slots) {
+		if (src_iter.slot->base_gfn != dst_iter.slot->base_gfn ||
+		    src_iter.slot->npages != dst_iter.slot->npages ||
+		    src_iter.slot->flags != dst_iter.slot->flags)
+			return false;
+
+		if (kvm_slot_can_be_private(dst_iter.slot) &&
+		    !kvm_gmem_params_match(src_iter.slot, dst_iter.slot))
+			return false;
+	}
+
+	/* There should be no more nodes to iterate if configurations match */
+	return !src_iter.node && !dst_iter.node;
+}
+
+static int kvm_move_memory_ctxt_from(struct kvm *dst, struct kvm *src)
+{
+	struct kvm_memslot_iter src_iter;
+	struct kvm_memslot_iter dst_iter;
+	struct kvm_memslots *src_slots, *dst_slots;
+	int i;
+
+	/* TODO: Do we also need to check consistency for as_id == SMM? */
+	src_slots = __kvm_memslots(src, 0);
+	dst_slots = __kvm_memslots(dst, 0);
+
+	if (!memslot_configurations_match(src_slots, dst_slots))
+		return -EINVAL;
+
+	/*
+	 * Transferring lpage_info is an optimization, lpage_info can be rebuilt
+	 * by the destination VM.
+	 */
+	kvm_for_each_memslot_pair(&src_iter, src_slots, &dst_iter, dst_slots) {
+		for (i = 1; i < KVM_NR_PAGE_SIZES; ++i) {
+			unsigned long ugfn = dst_iter.slot->userspace_addr >> PAGE_SHIFT;
+			int level = i + 1;
+
+			/*
+			 * If the gfn and userspace address are not aligned wrt each
+			 * other, skip migrating lpage_info.
+			 */
+			if ((dst_iter.slot->base_gfn ^ ugfn) &
+				(KVM_PAGES_PER_HPAGE(level) - 1))
+				continue;
+
+			kvfree(dst_iter.slot->arch.lpage_info[i - 1]);
+			dst_iter.slot->arch.lpage_info[i - 1] =
+				src_iter.slot->arch.lpage_info[i - 1];
+			src_iter.slot->arch.lpage_info[i - 1] = NULL;
+		}
+	}
+
+#ifdef CONFIG_KVM_GENERIC_MEMORY_ATTRIBUTES
+	/*
+	 * For VMs that don't use private memory, this will just be moving an
+	 * empty xarray pointer.
+	 */
+	dst->mem_attr_array.xa_head = src->mem_attr_array.xa_head;
+	src->mem_attr_array.xa_head = NULL;
+#endif
+
+	kvm_vm_dead(src);
+	return 0;
+}
+
 static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
 {
 	int r;
@@ -6351,6 +6450,14 @@ static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
 	if (r)
 		goto out_mark_migration_done;
 
+	r = kvm_lock_vm_memslots(kvm, source_kvm);
+	if (r)
+		goto out_unlock;
+
+	r = kvm_move_memory_ctxt_from(kvm, source_kvm);
+	if (r)
+		goto out_unlock_memslots;
+
 	/*
 	 * Different types of VMs will allow userspace to define if moving
 	 * encryption context should be supported.
@@ -6360,6 +6467,9 @@ static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
 		r = static_call(kvm_x86_vm_move_enc_context_from)(kvm, source_kvm);
 	}
 
+out_unlock_memslots:
+	kvm_unlock_vm_memslots(kvm, source_kvm);
+out_unlock:
 	kvm_unlock_two_vms(kvm, source_kvm);
 out_mark_migration_done:
 	kvm_mark_migration_done(kvm, source_kvm);
