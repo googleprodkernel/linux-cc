@@ -6351,7 +6351,14 @@ static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
 	if (r)
 		goto out_mark_migration_done;
 
-	r = static_call(kvm_x86_vm_move_enc_context_from)(kvm, source_kvm);
+	/*
+	 * Different types of VMs will allow userspace to define if moving
+	 * encryption context should be supported.
+	 */
+	if (kvm->arch.vm_move_enc_ctxt_supported &&
+	    kvm_x86_ops.vm_move_enc_context_from) {
+		r = static_call(kvm_x86_vm_move_enc_context_from)(kvm, source_kvm);
+	}
 
 	kvm_unlock_two_vms(kvm, source_kvm);
 out_mark_migration_done:

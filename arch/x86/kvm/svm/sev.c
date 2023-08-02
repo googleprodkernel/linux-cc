@@ -256,6 +256,8 @@ static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 		goto e_no_asid;
 	sev->asid = asid;
 
+	kvm->arch.vm_move_enc_ctxt_supported = true;
+
 	ret = sev_platform_init(&argp->error);
 	if (ret)
 		goto e_free;
