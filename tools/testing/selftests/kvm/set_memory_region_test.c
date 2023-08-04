@@ -395,7 +395,7 @@ static void test_invalid_guest_memfd(struct kvm_vm *vm, int memfd,
 static void test_add_private_memory_region(void)
 {
 	struct kvm_vm *vm, *vm2;
-	int memfd, i;
+	int memfd, memfd2, i;
 
 	pr_info("Testing ADD of KVM_MEM_PRIVATE memory regions\n");
 
@@ -408,24 +408,36 @@ static void test_add_private_memory_region(void)
 	test_invalid_guest_memfd(vm, memfd, 0, "Regular memfd() should fail");
 	close(memfd);
 
-	vm2 = vm_create_barebones_protected_vm();
-	memfd = vm_create_guest_memfd(vm2, MEM_REGION_SIZE, 0);
-	test_invalid_guest_memfd(vm, memfd, 0, "Other VM's guest_memfd() should fail");
-
-	vm_set_user_memory_region2(vm2, MEM_REGION_SLOT, KVM_MEM_PRIVATE,
-				   MEM_REGION_GPA, MEM_REGION_SIZE, 0, memfd, 0);
-	close(memfd);
-	kvm_vm_free(vm2);
-
+	/* Creating a guest memfd is actually VM-independent now */
 	memfd = vm_create_guest_memfd(vm, MEM_REGION_SIZE, 0);
 	for (i = 1; i < PAGE_SIZE; i++)
 		test_invalid_guest_memfd(vm, memfd, i, "Unaligned offset should fail");
 
 	vm_set_user_memory_region2(vm, MEM_REGION_SLOT, KVM_MEM_PRIVATE,
 				   MEM_REGION_GPA, MEM_REGION_SIZE, 0, memfd, 0);
-	close(memfd);
 
+	vm2 = vm_create_barebones_protected_vm();
+	memfd2 = vm_create_guest_memfd(vm2, MEM_REGION_SIZE, 0);
+
+	test_invalid_guest_memfd(vm2, memfd, 0,
+				 "Other VM's guest_memfd() should fail since it has been bound before");
+
+	vm_set_user_memory_region2(vm, MEM_REGION_SLOT, KVM_MEM_PRIVATE,
+				   MEM_REGION_GPA, 0, 0, memfd, 0);
+
+	/* Other VM's guest_memfd() should work since the last binding has been removed */
+	vm_set_user_memory_region2(vm2, MEM_REGION_SLOT, KVM_MEM_PRIVATE,
+				   MEM_REGION_GPA, MEM_REGION_SIZE, 0, memfd, 0);
+
+	/* Binding two different files to the same VM should work */
+	vm_set_user_memory_region2(vm2, MEM_REGION_SLOT + 1, KVM_MEM_PRIVATE,
+				   MEM_REGION_GPA + MEM_REGION_SIZE,
+				   MEM_REGION_SIZE, 0, memfd2, 0);
+
+	close(memfd);
 	kvm_vm_free(vm);
+	close(memfd2);
+	kvm_vm_free(vm2);
 }
 
 static void test_add_overlapping_private_memory_regions(void)
