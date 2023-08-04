@@ -12,7 +12,7 @@
 static struct vfsmount *kvm_gmem_mnt;
 
 struct kvm_gmem {
-	struct kvm *kvm;         /* Pointer to kvm bound to this gmem file */
+	struct kvm *kvm;         /* Shared reference to kvm for all bindings (xarray) */
 	struct xarray bindings;  /* For tracking ranges in this file bound to memslots */
 	struct list_head entry;  /* For tracking of a gmem inodes' files */
 };
@@ -93,6 +93,10 @@ static void kvm_gmem_invalidate_begin(struct kvm_gmem *gmem, pgoff_t start,
 	unsigned long index;
 	bool flush = false;
 
+	/* No bindings yet, don't need to involve kvm */
+	if (!kvm)
+		return;
+
 	KVM_MMU_LOCK(kvm);
 
 	kvm_mmu_invalidate_begin(kvm);
@@ -120,6 +124,10 @@ static void kvm_gmem_invalidate_end(struct kvm_gmem *gmem, pgoff_t start,
 				    pgoff_t end)
 {
 	struct kvm *kvm = gmem->kvm;
+
+	/* No bindings yet, don't need to involve kvm */
+	if (!kvm)
+		return;
 
 	KVM_MMU_LOCK(kvm);
 	if (xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT))
@@ -227,61 +235,27 @@ static long kvm_gmem_fallocate(struct file *file, int mode, loff_t offset,
 static int kvm_gmem_release(struct inode *inode, struct file *file)
 {
 	struct kvm_gmem *gmem = file->private_data;
-	struct kvm_memory_slot *slot;
-	struct kvm *kvm = gmem->kvm;
-	unsigned long index;
+
+	/* SPTE invalidation was done when memslots were unbound */
+
+	filemap_invalidate_lock(file->f_mapping);
 
 	/*
-	 * Prevent concurrent attempts to *unbind* a memslot.  This is the last
-	 * reference to the file and thus no new bindings can be created, but
-	 * dereferencing the slot for existing bindings needs to be protected
-	 * against memslot updates, specifically so that unbind doesn't race
-	 * and free the memslot (kvm_gmem_get_file() will return NULL).
+	 * When .release() is called, all refcounts to file have been dropped,
+	 * including those held by memslots. Hence, at this point, bindings
+	 * should be empty.
 	 */
-	mutex_lock(&kvm->slots_lock);
-
-	filemap_invalidate_lock(inode->i_mapping);
-
-	xa_for_each(&gmem->bindings, index, slot)
-		rcu_assign_pointer(slot->gmem.file, NULL);
-
-	synchronize_rcu();
-
-	/*
-	 * All in-flight operations are gone and new bindings can be created.
-	 * Zap all SPTEs pointed at by this file.  Do not free the backing
-	 * memory, as its lifetime is associated with the inode, not the file.
-	 */
-	kvm_gmem_invalidate_begin(gmem, 0, -1ul);
-	kvm_gmem_invalidate_end(gmem, 0, -1ul);
+	WARN_ON(!xa_empty(&gmem->bindings));
+	xa_destroy(&gmem->bindings);
 
 	list_del(&gmem->entry);
 
-	filemap_invalidate_unlock(inode->i_mapping);
+	filemap_invalidate_unlock(file->f_mapping);
 
-	mutex_unlock(&kvm->slots_lock);
+	/* file->f_mapping cleanup is done by default evict_inode handling */
 
-	xa_destroy(&gmem->bindings);
 	kfree(gmem);
-
-	kvm_put_kvm(kvm);
-
 	return 0;
-}
-
-static struct file *kvm_gmem_get_file(struct kvm_memory_slot *slot)
-{
-	struct file *file;
-
-	rcu_read_lock();
-
-	file = rcu_dereference(slot->gmem.file);
-	if (file && !get_file_rcu(file))
-		file = NULL;
-
-	rcu_read_unlock();
-
-	return file;
 }
 
 static const struct file_operations kvm_gmem_fops = {
@@ -365,8 +339,7 @@ static const struct inode_operations kvm_gmem_iops = {
 	.setattr	= kvm_gmem_setattr,
 };
 
-static struct file *kvm_gmem_alloc_file(struct kvm *kvm, struct inode *inode,
-					struct vfsmount *mnt)
+static struct file *kvm_gmem_alloc_file(struct inode *inode, struct vfsmount *mnt)
 {
 	struct file *file;
 	struct kvm_gmem *gmem;
@@ -382,8 +355,6 @@ static struct file *kvm_gmem_alloc_file(struct kvm *kvm, struct inode *inode,
 	file->f_flags |= O_LARGEFILE;
 	file->f_mapping = inode->i_mapping;
 
-	kvm_get_kvm(kvm);
-	gmem->kvm = kvm;
 	xa_init(&gmem->bindings);
 
 	file->private_data = gmem;
@@ -396,8 +367,7 @@ err:
 	return file;
 }
 
-static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags,
-			     struct vfsmount *mnt)
+static int __kvm_gmem_create(loff_t size, u64 flags, struct vfsmount *mnt)
 {
 	const char *anon_name = "[kvm-gmem]";
 	const struct qstr qname = QSTR_INIT(anon_name, strlen(anon_name));
@@ -429,7 +399,7 @@ static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags,
 		goto err_inode;
 	}
 
-	file = kvm_gmem_alloc_file(kvm, inode, mnt);
+	file = kvm_gmem_alloc_file(inode, mnt);
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
 		goto err_fd;
@@ -474,7 +444,7 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args)
 	if (!kvm_gmem_is_valid_size(size, flags))
 		return -EINVAL;
 
-	return __kvm_gmem_create(kvm, size, flags, kvm_gmem_mnt);
+	return __kvm_gmem_create(size, flags, kvm_gmem_mnt);
 }
 
 static inline void __kvm_gmem_do_link(struct inode *inode)
@@ -505,7 +475,6 @@ int kvm_gmem_link(struct kvm *kvm, struct kvm_link_guest_memfd *args)
 	int ret;
 	int fd;
 	struct fd f;
-	struct kvm_gmem *gmem;
 	u64 flags = args->flags;
 	u64 valid_flags = 0;
 	struct inode *inode;
@@ -520,11 +489,6 @@ int kvm_gmem_link(struct kvm *kvm, struct kvm_link_guest_memfd *args)
 
 	ret = -EINVAL;
 	if (f.file->f_op != &kvm_gmem_fops)
-		goto out;
-
-	/* Cannot link a gmem file with the same vm again */
-	gmem = f.file->private_data;
-	if (gmem->kvm == kvm)
 		goto out;
 
 	ret = fd = get_unused_fd_flags(0);
@@ -550,14 +514,70 @@ out:
 	return ret;
 }
 
+void kvm_gmem_unbind(struct kvm_memory_slot *slot)
+{
+	unsigned long start = slot->gmem.pgoff;
+	unsigned long end = start + slot->npages;
+	struct file *file = slot->gmem.file;
+	struct kvm_gmem *gmem = file->private_data;
+
+	filemap_invalidate_lock(file->f_mapping);
+
+	xa_store_range(&gmem->bindings, start, end - 1, NULL, GFP_KERNEL);
+	if (xa_empty(&gmem->bindings))
+		gmem->kvm = NULL;
+
+	slot->gmem.file = NULL;
+
+	filemap_invalidate_unlock(file->f_mapping);
+
+	/* SPTEs have been invalidated by KVM outside this function */
+
+	fput(file);
+}
+
+static int __kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
+			   struct file *file, loff_t offset)
+{
+	int ret;
+	unsigned long start, end;
+	struct kvm_gmem *gmem = file->private_data;
+
+	start = offset >> PAGE_SHIFT;
+	end = start + slot->npages;
+
+	filemap_invalidate_lock(file->f_mapping);
+
+	ret = -EINVAL;
+	if (gmem->kvm && gmem->kvm != kvm)
+		goto out_unlock;
+
+	ret = -EEXIST;
+	if (!xa_empty(&gmem->bindings) &&
+	    xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT))
+		goto out_unlock;
+
+	xa_store_range(&gmem->bindings, start, end - 1, slot, GFP_KERNEL);
+	gmem->kvm = kvm;
+
+	slot->gmem.file = file;
+	slot->gmem.pgoff = start;
+
+	ret = 0;
+
+out_unlock:
+	filemap_invalidate_unlock(file->f_mapping);
+	return ret;
+}
+
 int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 		  unsigned int fd, loff_t offset)
 {
-	loff_t size = slot->npages << PAGE_SHIFT;
-	unsigned long start, end, flags;
-	struct kvm_gmem *gmem;
-	struct inode *inode;
+	int ret;
 	struct file *file;
+	struct inode *inode;
+	int flags;
+	loff_t size;
 
 	BUILD_BUG_ON(sizeof(gfn_t) != sizeof(slot->gmem.pgoff));
 
@@ -565,11 +585,8 @@ int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 	if (!file)
 		return -EINVAL;
 
+	ret = -EINVAL;
 	if (file->f_op != &kvm_gmem_fops)
-		goto err;
-
-	gmem = file->private_data;
-	if (gmem->kvm != kvm)
 		goto err;
 
 	inode = file_inode(file);
@@ -580,6 +597,7 @@ int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 	 * memslot to be aligned to the largest possible page size used to back
 	 * the file (same as the size of the file itself).
 	 */
+	size = slot->npages << PAGE_SHIFT;
 	if (!kvm_gmem_is_valid_size(offset, flags) ||
 	    !kvm_gmem_is_valid_size(size, flags))
 		goto err;
@@ -587,65 +605,14 @@ int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 	if (offset + size > i_size_read(inode))
 		goto err;
 
-	filemap_invalidate_lock(inode->i_mapping);
-
-	start = offset >> PAGE_SHIFT;
-	end = start + slot->npages;
-
-	if (!xa_empty(&gmem->bindings) &&
-	    xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT)) {
-		filemap_invalidate_unlock(inode->i_mapping);
+	ret = __kvm_gmem_bind(kvm, slot, file, offset);
+	if (ret)
 		goto err;
-	}
 
-	/*
-	 * No synchronize_rcu() needed, any in-flight readers are guaranteed to
-	 * be see either a NULL file or this new file, no need for them to go
-	 * away.
-	 */
-	rcu_assign_pointer(slot->gmem.file, file);
-	slot->gmem.pgoff = start;
-
-	xa_store_range(&gmem->bindings, start, end - 1, slot, GFP_KERNEL);
-	filemap_invalidate_unlock(inode->i_mapping);
-
-	/*
-	 * Drop the reference to the file, even on success.  The file pins KVM,
-	 * not the other way 'round.  Active bindings are invalidated if the
-	 * file is closed before memslots are destroyed.
-	 */
-	fput(file);
 	return 0;
-
 err:
 	fput(file);
-	return -EINVAL;
-}
-
-void kvm_gmem_unbind(struct kvm_memory_slot *slot)
-{
-	unsigned long start = slot->gmem.pgoff;
-	unsigned long end = start + slot->npages;
-	struct kvm_gmem *gmem;
-	struct file *file;
-
-	/*
-	 * Nothing to do if the underlying file was already closed (or is being
-	 * closed right now), kvm_gmem_release() invalidates all bindings.
-	 */
-	file = kvm_gmem_get_file(slot);
-	if (!file)
-		return;
-
-	gmem = file->private_data;
-
-	filemap_invalidate_lock(file->f_mapping);
-	xa_store_range(&gmem->bindings, start, end - 1, NULL, GFP_KERNEL);
-	rcu_assign_pointer(slot->gmem.file, NULL);
-	synchronize_rcu();
-	filemap_invalidate_unlock(file->f_mapping);
-
-	fput(file);
+	return ret;
 }
 
 int kvm_gmem_get_pfn(struct kvm *kvm, struct kvm_memory_slot *slot,
@@ -657,22 +624,18 @@ int kvm_gmem_get_pfn(struct kvm *kvm, struct kvm_memory_slot *slot,
 	struct page *page;
 	struct file *file;
 
-	file = kvm_gmem_get_file(slot);
+	file = slot->gmem.file;
 	if (!file)
 		return -EFAULT;
 
 	gmem = file->private_data;
 
-	if (WARN_ON_ONCE(xa_load(&gmem->bindings, index) != slot)) {
-		fput(file);
+	if (WARN_ON_ONCE(xa_load(&gmem->bindings, index) != slot))
 		return -EIO;
-	}
 
 	folio = kvm_gmem_get_folio(file_inode(file), index);
-	if (!folio) {
-		fput(file);
+	if (!folio)
 		return -ENOMEM;
-	}
 
 	page = folio_file_page(folio, index);
 
@@ -680,7 +643,6 @@ int kvm_gmem_get_pfn(struct kvm *kvm, struct kvm_memory_slot *slot,
 	*max_order = compound_order(compound_head(page));
 
 	folio_unlock(folio);
-	fput(file);
 
 	return 0;
 }
@@ -689,25 +651,17 @@ EXPORT_SYMBOL_GPL(kvm_gmem_get_pfn);
 bool kvm_gmem_params_match(struct kvm_memory_slot *slot1,
 			   struct kvm_memory_slot *slot2)
 {
-	bool ret;
 	struct file *file1;
 	struct file *file2;
 
 	if (slot1->gmem.pgoff != slot2->gmem.pgoff)
 		return false;
 
-	file1 = kvm_gmem_get_file(slot1);
-	file2 = kvm_gmem_get_file(slot2);
+	file1 = slot1->gmem.file;
+	file2 = slot2->gmem.file;
 
-	ret = (file1 && file2 &&
-	       file_inode(file1) == file_inode(file2));
-
-	if (file1)
-		fput(file1);
-	if (file2)
-		fput(file2);
-
-	return ret;
+	return (file1 && file2 &&
+		file_inode(file1) == file_inode(file2));
 }
 EXPORT_SYMBOL_GPL(kvm_gmem_params_match);
 
