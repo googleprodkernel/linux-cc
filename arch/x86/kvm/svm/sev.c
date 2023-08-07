@@ -442,6 +442,8 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
 	if (ret)
 		goto e_no_asid;
 
+	kvm->arch.use_vm_enc_ctxt_op = true;
+
 	init_args.probe = false;
 	ret = sev_platform_init(&init_args);
 	if (ret)

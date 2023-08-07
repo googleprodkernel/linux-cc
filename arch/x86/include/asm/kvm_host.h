@@ -1578,6 +1578,7 @@ struct kvm_arch {
 #define SPLIT_DESC_CACHE_MIN_NR_OBJECTS (SPTE_ENT_PER_PAGE + 1)
 	struct kvm_mmu_memory_cache split_desc_cache;
 
+	bool use_vm_enc_ctxt_op;
 	gfn_t gfn_direct_bits;
 
 	/*
