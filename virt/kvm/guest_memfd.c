@@ -470,49 +470,47 @@ static struct inode *kvm_gmem_inode_make_secure_inode(const char *name,
 	return inode;
 }
 
-static struct file *kvm_gmem_inode_create_getfile(void *priv, loff_t size,
-						  u64 flags)
+static struct file *kvm_gmem_alloc_view(struct kvm *kvm, struct inode *inode,
+				     const char *name)
 {
-	static const char *name = "[kvm-gmem]";
-	struct inode *inode;
+	struct kvm_gmem *gmem;
 	struct file *file;
-	int err;
 
-	err = -ENOENT;
 	if (!try_module_get(kvm_gmem_fops.owner))
-		goto err;
+		return ERR_PTR(-ENOENT);
 
-	inode = kvm_gmem_inode_make_secure_inode(name, size, flags);
-	if (IS_ERR(inode)) {
-		err = PTR_ERR(inode);
+	gmem = kzalloc(sizeof(*gmem), GFP_KERNEL);
+	if (!gmem) {
+		file = ERR_PTR(-ENOMEM);
 		goto err_put_module;
 	}
 
 	file = alloc_file_pseudo(inode, kvm_gmem_mnt, name, O_RDWR,
 				 &kvm_gmem_fops);
-	if (IS_ERR(file)) {
-		err = PTR_ERR(file);
-		goto err_put_inode;
-	}
+	if (IS_ERR(file))
+		goto err_gmem;
 
 	file->f_flags |= O_LARGEFILE;
-	file->private_data = priv;
+	file->private_data = gmem;
 
-out:
+	kvm_get_kvm(kvm);
+	gmem->kvm = kvm;
+	xa_init(&gmem->bindings);
+	list_add(&gmem->entry, &file_inode(file)->i_mapping->i_private_list);
+
 	return file;
 
-err_put_inode:
-	iput(inode);
+err_gmem:
+	kfree(gmem);
 err_put_module:
 	module_put(kvm_gmem_fops.owner);
-err:
-	file = ERR_PTR(err);
-	goto out;
+	return file;
 }
 
 static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags)
 {
-	struct kvm_gmem *gmem;
+	static const char *name = "[kvm-gmem]";
+	struct inode *inode;
 	struct file *file;
 	int fd, err;
 
@@ -520,28 +518,23 @@ static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags)
 	if (fd < 0)
 		return fd;
 
-	gmem = kzalloc(sizeof(*gmem), GFP_KERNEL);
-	if (!gmem) {
-		err = -ENOMEM;
+	inode = kvm_gmem_inode_make_secure_inode(name, size, flags);
+	if (IS_ERR(inode)) {
+		err = PTR_ERR(inode);
 		goto err_fd;
 	}
 
-	file = kvm_gmem_inode_create_getfile(gmem, size, flags);
+	file = kvm_gmem_alloc_view(kvm, inode, name);
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
-		goto err_gmem;
+		goto err_put_inode;
 	}
-
-	kvm_get_kvm(kvm);
-	gmem->kvm = kvm;
-	xa_init(&gmem->bindings);
-	list_add(&gmem->entry, &file_inode(file)->i_mapping->i_private_list);
 
 	fd_install(fd, file);
 	return fd;
 
-err_gmem:
-	kfree(gmem);
+err_put_inode:
+	iput(inode);
 err_fd:
 	put_unused_fd(fd);
 	return err;
