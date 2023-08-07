@@ -555,6 +555,63 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args)
 	return __kvm_gmem_create(kvm, size, flags);
 }
 
+int kvm_gmem_link(struct kvm *kvm, struct kvm_link_guest_memfd *args)
+{
+	static const char *name = "[kvm-gmem]";
+	u64 flags = args->flags;
+	u64 valid_flags = 0;
+	struct file *dst_file, *src_file;
+	struct kvm_gmem *gmem;
+	struct timespec64 ts;
+	struct inode *inode;
+	struct fd f;
+	int ret, fd;
+
+	if (flags & ~valid_flags)
+		return -EINVAL;
+
+	f = fdget(args->fd);
+	src_file = fd_file(f);
+	if (!src_file)
+		return -EINVAL;
+
+	ret = -EINVAL;
+	if (src_file->f_op != &kvm_gmem_fops)
+		goto out;
+
+	/* Cannot link a gmem file with the same vm again */
+	gmem = src_file->private_data;
+	if (gmem->kvm == kvm)
+		goto out;
+
+	ret = fd = get_unused_fd_flags(0);
+	if (ret < 0)
+		goto out;
+
+	inode = file_inode(src_file);
+	dst_file = kvm_gmem_alloc_view(kvm, inode, name);
+	if (IS_ERR(dst_file)) {
+		ret = PTR_ERR(dst_file);
+		goto out_fd;
+	}
+
+	ts = inode_set_ctime_current(inode);
+	inode_set_atime_to_ts(inode, ts);
+
+	inc_nlink(inode);
+	ihold(inode);
+
+	fd_install(fd, dst_file);
+	fdput(f);
+	return fd;
+
+out_fd:
+	put_unused_fd(fd);
+out:
+	fdput(f);
+	return ret;
+}
+
 int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
 		  unsigned int fd, loff_t offset)
 {
