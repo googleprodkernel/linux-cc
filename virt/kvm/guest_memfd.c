@@ -778,6 +778,31 @@ out:
 }
 EXPORT_SYMBOL_GPL(kvm_gmem_get_pfn);
 
+bool kvm_gmem_params_match(struct kvm_memory_slot *slot1,
+			   struct kvm_memory_slot *slot2)
+{
+	bool ret;
+	struct file *file1;
+	struct file *file2;
+
+	if (slot1->gmem.pgoff != slot2->gmem.pgoff)
+		return false;
+
+	file1 = kvm_gmem_get_file(slot1);
+	file2 = kvm_gmem_get_file(slot2);
+
+	ret = (file1 && file2 &&
+	       file_inode(file1) == file_inode(file2));
+
+	if (file1)
+		fput(file1);
+	if (file2)
+		fput(file2);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(kvm_gmem_params_match);
+
 #ifdef CONFIG_KVM_GENERIC_PRIVATE_MEM
 long kvm_gmem_populate(struct kvm *kvm, gfn_t start_gfn, void __user *src, long npages,
 		       kvm_gmem_populate_cb post_populate, void *opaque)

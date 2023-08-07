@@ -1201,6 +1201,16 @@ struct kvm_memory_slot *gfn_to_memslot(struct kvm *kvm, gfn_t gfn);
 struct kvm_memslots *kvm_vcpu_memslots(struct kvm_vcpu *vcpu);
 struct kvm_memory_slot *kvm_vcpu_gfn_to_memslot(struct kvm_vcpu *vcpu, gfn_t gfn);
 
+
+/* Iterate over a pair of memslots in gfn order until one of the trees end */
+#define kvm_for_each_memslot_pair(iter1, slots1, iter2, slots2)		\
+	for (kvm_memslot_iter_start(iter1, slots1, 0),			\
+		     kvm_memslot_iter_start(iter2, slots2, 0);		\
+	     kvm_memslot_iter_is_valid(iter1, U64_MAX) &&		\
+		     kvm_memslot_iter_is_valid(iter2, U64_MAX);		\
+	     kvm_memslot_iter_next(iter1),				\
+		     kvm_memslot_iter_next(iter2))
+
 /*
  * KVM_SET_USER_MEMORY_REGION ioctl allows the following operations:
  * - create a new memory slot
@@ -2542,6 +2552,8 @@ static inline bool kvm_mem_is_private(struct kvm *kvm, gfn_t gfn)
 int kvm_gmem_get_pfn(struct kvm *kvm, struct kvm_memory_slot *slot,
 		     gfn_t gfn, kvm_pfn_t *pfn, struct page **page,
 		     int *max_order);
+bool kvm_gmem_params_match(struct kvm_memory_slot *slot1,
+			   struct kvm_memory_slot *slot2);
 #else
 static inline int kvm_gmem_get_pfn(struct kvm *kvm,
 				   struct kvm_memory_slot *slot, gfn_t gfn,
@@ -2550,6 +2562,11 @@ static inline int kvm_gmem_get_pfn(struct kvm *kvm,
 {
 	KVM_BUG_ON(1, kvm);
 	return -EIO;
+}
+static inline bool kvm_gmem_params_match(struct kvm_memory_slot *slot1,
+					 struct kvm_memory_slot *slot2)
+{
+		return false;
 }
 #endif /* CONFIG_KVM_PRIVATE_MEM */
 
