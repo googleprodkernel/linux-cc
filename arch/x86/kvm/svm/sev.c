@@ -1938,34 +1938,15 @@ static int sev_check_source_vcpus(struct kvm *dst, struct kvm *src)
 	return 0;
 }
 
-int sev_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
+int sev_vm_move_enc_context_from(struct kvm *kvm, struct kvm *source_kvm)
 {
 	struct kvm_sev_info *dst_sev = to_kvm_sev_info(kvm);
 	struct kvm_sev_info *src_sev, *cg_cleanup_sev;
-	CLASS(fd, f)(source_fd);
-	struct kvm *source_kvm;
 	bool charged = false;
 	int ret;
 
-	if (fd_empty(f))
-		return -EBADF;
-
-	if (!file_is_kvm(fd_file(f)))
-		return -EBADF;
-
-	source_kvm = fd_file(f)->private_data;
-	ret = kvm_mark_migration_in_progress(kvm, source_kvm);
-	if (ret)
-		return ret;
-	ret = kvm_lock_two_vms(kvm, source_kvm);
-	if (ret)
-		goto out_mark_migration_done;
-
-	if (kvm->arch.vm_type != source_kvm->arch.vm_type ||
-	    sev_guest(kvm) || !sev_guest(source_kvm)) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
+	if (sev_guest(kvm) || !sev_guest(source_kvm))
+		return -EINVAL;
 
 	src_sev = to_kvm_sev_info(source_kvm);
 
@@ -2004,10 +1985,6 @@ out_dst_cgroup:
 		sev_misc_cg_uncharge(cg_cleanup_sev);
 	put_misc_cg(cg_cleanup_sev->misc_cg);
 	cg_cleanup_sev->misc_cg = NULL;
-out_unlock:
-	kvm_unlock_two_vms(kvm, source_kvm);
-out_mark_migration_done:
-	kvm_mark_migration_done(kvm, source_kvm);
 	return ret;
 }
 
