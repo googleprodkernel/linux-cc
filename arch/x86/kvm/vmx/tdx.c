@@ -1479,7 +1479,7 @@ static int tdx_sept_page_aug(struct kvm *kvm, gfn_t gfn,
 		if (level_state.level == tdx_level &&
 		    level_state.state == TDX_SEPT_PENDING &&
 		    entry.leaf && entry.pfn == pfn && entry.sve) {
-			tdx_unpin(kvm, gfn, pfn, level);
+			tdx_unpin(kvm, pfn);
 			WARN_ON_ONCE(!(to_kvm_tdx(kvm)->attributes &
 				       TDX_TD_ATTR_SEPT_VE_DISABLE));
 			return -EAGAIN;
@@ -2185,8 +2185,8 @@ static int tdx_get_capabilities(struct kvm_tdx_cmd *cmd)
 		.xfam_fixed0 = tdsysinfo->xfam_fixed0,
 		.xfam_fixed1 = tdsysinfo->xfam_fixed1,
 		.supported_gpaw = TDX_CAP_GPAW_48 |
-		(kvm_get_shadow_phys_bits() >= 52 &&
-		 cpu_has_vmx_ept_5levels()) ? TDX_CAP_GPAW_52 : 0,
+		((kvm_get_shadow_phys_bits() >= 52 &&
+		 cpu_has_vmx_ept_5levels()) ? TDX_CAP_GPAW_52 : 0),
 		.nr_cpuid_configs = tdsysinfo->num_cpuid_config,
 		.padding = 0,
 	};
