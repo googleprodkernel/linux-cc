@@ -344,7 +344,7 @@ static void register_encrypted_memory_region(struct kvm_vm *vm,
  * TD creation/setup/finalization
  */
 
-static void tdx_enable_capabilities(struct kvm_vm *vm)
+void tdx_enable_capabilities(struct kvm_vm *vm)
 {
 	int rc;
 
@@ -574,7 +574,6 @@ void td_initialize(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
 	uint64_t nr_pages_required;
 
 	tdx_enable_capabilities(vm);
-
 	tdx_td_init(vm, attributes);
 
 	nr_pages_required = vm_nr_pages_required(VM_MODE_DEFAULT, 1, 0);

@@ -805,8 +805,10 @@ static void __vm_mem_region_delete(struct kvm_vm *vm,
 
 	sparsebit_free(&region->unused_phy_pages);
 	sparsebit_free(&region->protected_phy_pages);
-	ret = munmap(region->mmap_start, region->mmap_size);
-	TEST_ASSERT(!ret, __KVM_SYSCALL_ERROR("munmap()", ret));
+	if (!vm->enc_migrated) {
+		ret = munmap(region->mmap_start, region->mmap_size);
+		TEST_ASSERT(!ret, __KVM_SYSCALL_ERROR("munmap()", ret));
+	}
 	if (region->fd >= 0) {
 		/* There's an extra map when using shared memory. */
 		ret = munmap(region->mmap_alias, region->mmap_size);
@@ -1285,6 +1287,50 @@ void vm_mem_region_move(struct kvm_vm *vm, uint32_t slot, uint64_t new_gpa)
 	TEST_ASSERT(!ret, "KVM_SET_USER_MEMORY_REGION2 failed\n"
 		    "ret: %i errno: %i slot: %u new_gpa: 0x%lx",
 		    ret, errno, slot, new_gpa);
+}
+
+static void vm_migrate_mem_region(struct kvm_vm *dst_vm, struct kvm_vm *src_vm,
+				  struct userspace_mem_region *src_region)
+{
+	struct userspace_mem_region *dst_region;
+	int dst_guest_memfd;
+
+	dst_guest_memfd =
+		vm_link_guest_memfd(dst_vm, src_region->region.guest_memfd, 0);
+
+	dst_region = vm_mem_region_alloc(
+			dst_vm, src_region->region.guest_phys_addr,
+			src_region->region.slot,
+			src_region->region.memory_size / src_vm->page_size,
+			src_region->region.flags);
+
+	dst_region->mmap_size = src_region->mmap_size;
+	dst_region->mmap_start = src_region->mmap_start;
+	dst_region->host_mem = src_region->host_mem;
+
+	src_region->mmap_start = 0;
+	src_region->host_mem = 0;
+
+	dst_region->region.guest_memfd = dst_guest_memfd;
+	dst_region->region.guest_memfd_offset =
+		src_region->region.guest_memfd_offset;
+
+	userspace_mem_region_commit(dst_vm, dst_region);
+}
+
+void vm_migrate_mem_regions(struct kvm_vm *dst_vm, struct kvm_vm *src_vm)
+{
+	int bkt;
+	struct hlist_node *node;
+	struct userspace_mem_region *region;
+
+	hash_for_each_safe(src_vm->regions.slot_hash, bkt, node, region,
+			   slot_node) {
+		TEST_ASSERT(region->region.guest_memfd >= 0,
+			    "Migrating mem regions is only supported for GUEST_MEMFD");
+
+		vm_migrate_mem_region(dst_vm, src_vm, region);
+	}
 }
 
 /*

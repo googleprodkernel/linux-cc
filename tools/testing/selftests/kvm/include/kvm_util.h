@@ -110,6 +110,9 @@ struct kvm_vm {
 
 	struct kvm_binary_stats stats;
 
+	/* VM was migrated using KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM */
+	bool enc_migrated;
+
 	/*
 	 * KVM region slots. These are the default memslots used by page
 	 * allocators, e.g., lib/elf uses the memslots[MEM_REGION_CODE]
@@ -673,6 +676,7 @@ static inline bool vm_arch_has_protected_memory(struct kvm_vm *vm)
 
 void vm_mem_region_set_flags(struct kvm_vm *vm, uint32_t slot, uint32_t flags);
 void vm_mem_region_move(struct kvm_vm *vm, uint32_t slot, uint64_t new_gpa);
+void vm_migrate_mem_regions(struct kvm_vm *dst_vm, struct kvm_vm *src_vm);
 void vm_mem_region_delete(struct kvm_vm *vm, uint32_t slot);
 struct kvm_vcpu *__vm_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id);
 void vm_populate_vaddr_bitmap(struct kvm_vm *vm);
@@ -1130,6 +1134,22 @@ static inline struct kvm_vcpu *vm_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id,
 	vcpu_arch_set_entry_point(vcpu, guest_code);
 
 	return vcpu;
+}
+
+/*
+ * Adds a vCPU with no defaults. This vcpu will be used for migration
+ *
+ * Input Args:
+ *   vm - Virtual Machine
+ *   vcpu_id - The id of the VCPU to add to the VM.
+ */
+struct kvm_vcpu *vm_arch_vcpu_add_for_migration(struct kvm_vm *vm,
+						uint32_t vcpu_id);
+
+static inline struct kvm_vcpu *vm_vcpu_add_for_migration(struct kvm_vm *vm,
+							 uint32_t vcpu_id)
+{
+	return vm_arch_vcpu_add_for_migration(vm, vcpu_id);
 }
 
 /* Re-create a vCPU after restarting a VM, e.g. for state save/restore tests. */
