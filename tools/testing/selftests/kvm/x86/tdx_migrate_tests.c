@@ -10,27 +10,6 @@
 #define NR_MIGRATE_TEST_VMS 10
 #define TDX_IOEXIT_TEST_PORT 0x50
 
-static int __tdx_migrate_from(int dst_fd, int src_fd)
-{
-	struct kvm_enable_cap cap = {
-		.cap = KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM,
-		.args = { src_fd }
-	};
-
-	return ioctl(dst_fd, KVM_ENABLE_CAP, &cap);
-}
-
-
-static void tdx_migrate_from(struct kvm_vm *dst_vm, struct kvm_vm *src_vm)
-{
-	int ret;
-
-	vm_migrate_mem_regions(dst_vm, src_vm);
-	ret = __tdx_migrate_from(dst_vm->fd, src_vm->fd);
-	TEST_ASSERT(!ret, "Migration failed, ret: %d, errno: %d\n", ret, errno);
-	src_vm->enc_migrated = true;
-}
-
 void guest_code(void)
 {
 	int ret;

@@ -130,4 +130,9 @@ uint64_t tdx_test_read_64bit(struct kvm_vcpu *vcpu, uint64_t port);
  */
 uint64_t tdx_test_read_64bit_report_from_guest(struct kvm_vcpu *vcpu);
 
+/*
+ * Enables X2APIC for TDX guests.
+ */
+void tdx_guest_x2apic_enable(void);
+
 #endif // SELFTEST_TDX_TEST_UTIL_H

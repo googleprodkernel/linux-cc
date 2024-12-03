@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "apic.h"
 #include "kvm_util.h"
 #include "tdx/tdcall.h"
 #include "tdx/tdx.h"
@@ -184,4 +185,20 @@ uint64_t tdx_test_read_64bit(struct kvm_vcpu *vcpu, uint64_t port)
 uint64_t tdx_test_read_64bit_report_from_guest(struct kvm_vcpu *vcpu)
 {
 	return tdx_test_read_64bit(vcpu, TDX_TEST_REPORT_PORT);
+}
+
+void tdx_guest_x2apic_enable(void)
+{
+	uint64_t x2apic_spiv = APIC_BASE_MSR + (APIC_SPIV >> 4);
+	uint64_t value, ret;
+
+	/*
+	 * x2apic does not have to be enabled for TDs, TDs already have x2apic
+	 * enabled, and must use x2apic. Hence, we just soft-enable APIC.
+	 */
+	ret = tdg_vp_vmcall_instruction_rdmsr(x2apic_spiv, &value);
+	GUEST_ASSERT_EQ(ret, 0);
+	ret = tdg_vp_vmcall_instruction_wrmsr(x2apic_spiv,
+					      value | APIC_SPIV_APIC_ENABLED);
+	GUEST_ASSERT_EQ(ret, 0);
 }

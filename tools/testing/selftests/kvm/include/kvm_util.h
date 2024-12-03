@@ -80,6 +80,7 @@ enum kvm_mem_region_type {
 	MEM_REGION_PT,
 	MEM_REGION_TEST_DATA,
 	MEM_REGION_TDX_BOOT_PARAMS,
+	MEM_REGION_TDX_SHARED_DATA,
 	MEM_REGION_UCALL,
 	NR_MEM_REGIONS,
 };
@@ -958,6 +959,9 @@ int _kvm_irq_line(struct kvm_vm *vm, uint32_t irq, int level);
 struct kvm_irq_routing *kvm_gsi_routing_create(void);
 void kvm_gsi_routing_irqchip_add(struct kvm_irq_routing *routing,
 		uint32_t gsi, uint32_t pin);
+void kvm_gsi_routing_msi_add(struct kvm_irq_routing *routing, uint32_t gsi,
+			     uint32_t address_lo, uint32_t address_hi,
+			     uint32_t data);
 int _kvm_gsi_routing_write(struct kvm_vm *vm, struct kvm_irq_routing *routing);
 void kvm_gsi_routing_write(struct kvm_vm *vm, struct kvm_irq_routing *routing);
 

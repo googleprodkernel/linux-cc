@@ -10,6 +10,8 @@ extern uint64_t tdx_s_bit;
 void tdx_filter_cpuid(struct kvm_vm *vm, struct kvm_cpuid2 *cpuid_data);
 void __tdx_mask_cpuid_features(struct kvm_cpuid_entry2 *entry);
 void tdx_enable_capabilities(struct kvm_vm *vm);
+int __tdx_migrate_from(int dst_fd, int src_fd);
+void tdx_migrate_from(struct kvm_vm *dst_vm, struct kvm_vm *src_vm);
 
 struct kvm_vcpu *td_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id, void *guest_code);
 

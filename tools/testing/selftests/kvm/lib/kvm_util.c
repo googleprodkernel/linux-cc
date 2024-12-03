@@ -1293,10 +1293,12 @@ static void vm_migrate_mem_region(struct kvm_vm *dst_vm, struct kvm_vm *src_vm,
 				  struct userspace_mem_region *src_region)
 {
 	struct userspace_mem_region *dst_region;
-	int dst_guest_memfd;
+	int dst_guest_memfd = -1;
 
-	dst_guest_memfd =
-		vm_link_guest_memfd(dst_vm, src_region->region.guest_memfd, 0);
+	if (src_region->region.guest_memfd != -1)
+		dst_guest_memfd = vm_link_guest_memfd(dst_vm,
+						      src_region->region.guest_memfd,
+						      0);
 
 	dst_region = vm_mem_region_alloc(
 			dst_vm, src_region->region.guest_phys_addr,
@@ -1312,8 +1314,12 @@ static void vm_migrate_mem_region(struct kvm_vm *dst_vm, struct kvm_vm *src_vm,
 	src_region->host_mem = 0;
 
 	dst_region->region.guest_memfd = dst_guest_memfd;
-	dst_region->region.guest_memfd_offset =
-		src_region->region.guest_memfd_offset;
+	if (src_region->region.guest_memfd == -1) {
+		dst_region->fd = src_region->fd;
+	} else {
+		dst_region->region.guest_memfd_offset =
+			src_region->region.guest_memfd_offset;
+	}
 
 	userspace_mem_region_commit(dst_vm, dst_region);
 }
@@ -2054,6 +2060,25 @@ void kvm_gsi_routing_irqchip_add(struct kvm_irq_routing *routing,
 	routing->entries[i].flags = 0;
 	routing->entries[i].u.irqchip.irqchip = 0;
 	routing->entries[i].u.irqchip.pin = pin;
+	routing->nr++;
+}
+
+void kvm_gsi_routing_msi_add(struct kvm_irq_routing *routing, uint32_t gsi,
+			     uint32_t address_lo, uint32_t address_hi,
+			     uint32_t data)
+{
+	int i;
+
+	assert(routing);
+	assert(routing->nr < KVM_MAX_IRQ_ROUTES);
+
+	i = routing->nr;
+	routing->entries[i].gsi = gsi;
+	routing->entries[i].type = KVM_IRQ_ROUTING_MSI;
+	routing->entries[i].flags = 0;
+	routing->entries[i].u.msi.address_lo = address_lo;
+	routing->entries[i].u.msi.address_hi = address_hi;
+	routing->entries[i].u.msi.data = data;
 	routing->nr++;
 }
 

@@ -372,6 +372,26 @@ static void tdx_apply_cr4_restrictions(struct kvm_sregs *sregs)
 	sregs->cr4 &= ~(X86_CR4_VMXE | X86_CR4_SMXE);
 }
 
+int __tdx_migrate_from(int dst_fd, int src_fd)
+{
+	struct kvm_enable_cap cap = {
+		.cap = KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM,
+		.args = { src_fd }
+	};
+
+	return ioctl(dst_fd, KVM_ENABLE_CAP, &cap);
+}
+
+void tdx_migrate_from(struct kvm_vm *dst_vm, struct kvm_vm *src_vm)
+{
+	int ret;
+
+	vm_migrate_mem_regions(dst_vm, src_vm);
+	ret = __tdx_migrate_from(dst_vm->fd, src_vm->fd);
+	TEST_ASSERT(!ret, "Migration failed, ret: %d, errno: %d\n", ret, errno);
+	src_vm->enc_migrated = true;
+}
+
 static void load_td_boot_code(struct kvm_vm *vm)
 {
 	void *boot_code_hva = addr_gpa2hva(vm, FOUR_GIGABYTES_GPA - TD_BOOT_CODE_SIZE);
