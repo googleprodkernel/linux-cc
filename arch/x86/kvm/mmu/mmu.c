@@ -7745,7 +7745,9 @@ int kvm_arch_pre_set_memory_attributes(struct kvm *kvm,
 				       struct kvm_gfn_range *range)
 {
 	struct kvm_memory_slot *slot = range->slot;
+	bool flush;
 	int level;
+	int ret;
 
 	/*
 	 * Zap SPTEs even if the slot can't be mapped PRIVATE.  KVM x86 only
@@ -7759,10 +7761,10 @@ int kvm_arch_pre_set_memory_attributes(struct kvm *kvm,
 	 * a hugepage can be used for affected ranges.
 	 */
 	if (WARN_ON_ONCE(!kvm_arch_supports_gmem(kvm)))
-		return false;
+		return 0;
 
 	if (WARN_ON_ONCE(range->end <= range->start))
-		return false;
+		return 0;
 
 	/*
 	 * If the head and tail pages of the range currently allow a hugepage,
@@ -7799,7 +7801,13 @@ int kvm_arch_pre_set_memory_attributes(struct kvm *kvm,
 	else
 		range->attr_filter = KVM_FILTER_PRIVATE;
 
-	return kvm_unmap_gfn_range(kvm, range);
+	ret = kvm_split_boundary_leafs(kvm, range);
+	if (ret < 0)
+		return ret;
+	flush = ret;
+
+	flush |= kvm_unmap_gfn_range(kvm, range);
+	return flush;
 }
 
 
@@ -7838,7 +7846,7 @@ int kvm_arch_post_set_memory_attributes(struct kvm *kvm,
 	 * SHARED may now allow hugepages.
 	 */
 	if (WARN_ON_ONCE(!kvm_arch_supports_gmem(kvm)))
-		return false;
+		return 0;
 
 	/*
 	 * The sequence matters here: upper levels consume the result of lower
@@ -7885,7 +7893,7 @@ int kvm_arch_post_set_memory_attributes(struct kvm *kvm,
 				hugepage_set_mixed(slot, gfn, level);
 		}
 	}
-	return false;
+	return 0;
 }
 
 void kvm_mmu_init_memslot_memory_attributes(struct kvm *kvm,
