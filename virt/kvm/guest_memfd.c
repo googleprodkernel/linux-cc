@@ -264,25 +264,25 @@ static bool kvm_gmem_has_safe_refcount(struct address_space *mapping, pgoff_t st
 	return refcount_safe;
 }
 
-static void kvm_gmem_unmap_private(struct kvm_gmem *gmem, pgoff_t start,
-				   pgoff_t end)
+static int kvm_gmem_zap(struct kvm_gmem *gmem, pgoff_t start, pgoff_t end,
+			enum kvm_gfn_range_filter filter, bool do_split)
 {
 	struct kvm_memory_slot *slot;
 	struct kvm *kvm = gmem->kvm;
 	unsigned long index;
 	bool locked = false;
 	bool flush = false;
+	int ret;
 
+	ret = 0;
 	xa_for_each_range(&gmem->bindings, index, slot, start, end - 1) {
 		pgoff_t pgoff = slot->gmem.pgoff;
-
 		struct kvm_gfn_range gfn_range = {
 			.start = slot->base_gfn + max(pgoff, start) - pgoff,
 			.end = slot->base_gfn + min(pgoff + slot->npages, end) - pgoff,
 			.slot = slot,
 			.may_block = true,
-			/* This function is only concerned with private mappings. */
-			.attr_filter = KVM_FILTER_PRIVATE,
+			.attr_filter = filter,
 		};
 
 		if (!locked) {
@@ -290,14 +290,25 @@ static void kvm_gmem_unmap_private(struct kvm_gmem *gmem, pgoff_t start,
 			locked = true;
 		}
 
+		if (do_split) {
+			ret = kvm_split_boundary_leafs(kvm, &gfn_range);
+			if (ret < 0)
+				goto out;
+
+			flush |= ret;
+			ret = 0;
+		}
+
 		flush |= kvm_mmu_unmap_gfn_range(kvm, &gfn_range);
 	}
-
+out:
 	if (flush)
 		kvm_flush_remote_tlbs(kvm);
 
 	if (locked)
 		KVM_MMU_UNLOCK(kvm);
+
+	return ret;
 }
 
 static void kvm_gmem_invalidate_begin(struct kvm_gmem *gmem, pgoff_t start,
@@ -460,6 +471,8 @@ static int kvm_gmem_convert_should_proceed(struct inode *inode,
 					   struct conversion_work *work,
 					   bool to_shared, pgoff_t *error_index)
 {
+	int ret = 0;
+
 	if (to_shared) {
 		struct list_head *gmem_list;
 		struct kvm_gmem *gmem;
@@ -468,19 +481,21 @@ static int kvm_gmem_convert_should_proceed(struct inode *inode,
 		work_end = work->start + work->nr_pages;
 
 		gmem_list = &inode->i_mapping->i_private_list;
-		list_for_each_entry(gmem, gmem_list, entry)
-			kvm_gmem_unmap_private(gmem, work->start, work_end);
+		list_for_each_entry(gmem, gmem_list, entry) {
+			ret = kvm_gmem_zap(gmem, work->start, work_end,
+					   KVM_FILTER_PRIVATE, true);
+		}
 	} else {
 		unmap_mapping_pages(inode->i_mapping, work->start,
 				    work->nr_pages, false);
 
 		if (!kvm_gmem_has_safe_refcount(inode->i_mapping, work->start,
 						work->nr_pages, error_index)) {
-			return -EAGAIN;
+			ret = -EAGAIN;
 		}
 	}
 
-	return 0;
+	return ret;
 }
 
 static int kvm_gmem_restructure_folios_in_range(struct inode *inode,
@@ -1133,52 +1148,11 @@ err:
 	return ERR_PTR(ret);
 }
 
-static void kvm_gmem_invalidate_begin_and_zap(struct kvm_gmem *gmem,
-					      pgoff_t start, pgoff_t end)
+static void kvm_gmem_do_invalidate_end(struct kvm *kvm)
 {
-	bool flush = false, found_memslot = false;
-	struct kvm_memory_slot *slot;
-	struct kvm *kvm = gmem->kvm;
-	unsigned long index;
-
-	xa_for_each_range(&gmem->bindings, index, slot, start, end - 1) {
-		enum kvm_gfn_range_filter filter;
-		pgoff_t pgoff = slot->gmem.pgoff;
-
-		filter = KVM_FILTER_PRIVATE;
-		if (kvm_gmem_memslot_supports_shared(slot)) {
-			/*
-			 * Unmapping would also cause invalidation, but cannot
-			 * rely on mmu_notifiers to do invalidation via
-			 * unmapping, since memory may not be mapped to
-			 * userspace.
-			 */
-			filter |= KVM_FILTER_SHARED;
-		}
-
-		struct kvm_gfn_range gfn_range = {
-			.start = slot->base_gfn + max(pgoff, start) - pgoff,
-			.end = slot->base_gfn + min(pgoff + slot->npages, end) - pgoff,
-			.slot = slot,
-			.may_block = true,
-			.attr_filter = filter,
-		};
-
-		if (!found_memslot) {
-			found_memslot = true;
-
-			KVM_MMU_LOCK(kvm);
-			kvm_mmu_invalidate_begin(kvm);
-		}
-
-		flush |= kvm_mmu_unmap_gfn_range(kvm, &gfn_range);
-	}
-
-	if (flush)
-		kvm_flush_remote_tlbs(kvm);
-
-	if (found_memslot)
-		KVM_MMU_UNLOCK(kvm);
+	KVM_MMU_LOCK(kvm);
+	kvm_mmu_invalidate_end(kvm);
+	KVM_MMU_UNLOCK(kvm);
 }
 
 static void kvm_gmem_invalidate_end(struct kvm_gmem *gmem, pgoff_t start,
@@ -1186,11 +1160,8 @@ static void kvm_gmem_invalidate_end(struct kvm_gmem *gmem, pgoff_t start,
 {
 	struct kvm *kvm = gmem->kvm;
 
-	if (xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT)) {
-		KVM_MMU_LOCK(kvm);
-		kvm_mmu_invalidate_end(kvm);
-		KVM_MMU_UNLOCK(kvm);
-	}
+	if (xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT))
+		kvm_gmem_do_invalidate_end(kvm);
 }
 
 /**
@@ -1381,6 +1352,7 @@ static long kvm_gmem_punch_hole(struct inode *inode, loff_t offset, loff_t len)
 	struct list_head *gmem_list = &inode->i_mapping->i_private_list;
 	pgoff_t start = offset >> PAGE_SHIFT;
 	pgoff_t end = (offset + len) >> PAGE_SHIFT;
+	LIST_HEAD(invalidated_kvms);
 	struct kvm_gmem *gmem;
 	long ret;
 
@@ -1391,9 +1363,26 @@ static long kvm_gmem_punch_hole(struct inode *inode, loff_t offset, loff_t len)
 	filemap_invalidate_lock(inode->i_mapping);
 
 	list_for_each_entry(gmem, gmem_list, entry)
-		kvm_gmem_invalidate_begin_and_zap(gmem, start, end);
+		kvm_gmem_invalidate_begin(gmem, start, end);
 
 	ret = 0;
+	list_for_each_entry(gmem, gmem_list, entry) {
+		enum kvm_gfn_range_filter filter;
+
+		/*
+		 * kvm_gmem_invalidate_begin() would have unmapped shared
+		 * mappings via mmu notifiers, but only if those mappings were
+		 * actually set up. Since guest_memfd cannot assume that shared
+		 * mappings were set up, zap both private and shared mappings
+		 * here. If shared mappings were zapped, this should not be
+		 * expensive.
+		 */
+		filter = KVM_FILTER_PRIVATE | KVM_FILTER_SHARED;
+		ret = kvm_gmem_zap(gmem, start, end, filter, true);
+		if (ret)
+			goto out;
+	}
+
 	if (kvm_gmem_has_custom_allocator(inode)) {
 		ret = kvm_gmem_truncate_inode_range(inode, offset, offset + len);
 	} else {
@@ -1401,6 +1390,7 @@ static long kvm_gmem_punch_hole(struct inode *inode, loff_t offset, loff_t len)
 		truncate_inode_pages_range(inode->i_mapping, offset, offset + len - 1);
 	}
 
+out:
 	list_for_each_entry(gmem, gmem_list, entry)
 		kvm_gmem_invalidate_end(gmem, start, end);
 
@@ -1522,7 +1512,8 @@ static int kvm_gmem_release(struct inode *inode, struct file *file)
 	 * Zap all SPTEs pointed at by this file.  Do not free the backing
 	 * memory, as its lifetime is associated with the inode, not the file.
 	 */
-	kvm_gmem_invalidate_begin_and_zap(gmem, 0, -1ul);
+	kvm_gmem_invalidate_begin(gmem, 0, -1ul);
+	kvm_gmem_zap(gmem, 0, -1ul, KVM_FILTER_PRIVATE | KVM_FILTER_SHARED, false);
 	kvm_gmem_invalidate_end(gmem, 0, -1ul);
 
 	list_del(&gmem->entry);
@@ -1850,8 +1841,14 @@ static int kvm_gmem_error_folio(struct address_space *mapping, struct folio *fol
 	start = folio->index;
 	end = start + folio_nr_pages(folio);
 
-	list_for_each_entry(gmem, gmem_list, entry)
-		kvm_gmem_invalidate_begin_and_zap(gmem, start, end);
+	/* The size of the SEPT will not exceed the size of the folio */
+	list_for_each_entry(gmem, gmem_list, entry) {
+		enum kvm_gfn_range_filter filter;
+
+		kvm_gmem_invalidate_begin(gmem, start, end);
+		filter = KVM_FILTER_PRIVATE | KVM_FILTER_SHARED;
+		kvm_gmem_zap(gmem, start, end, filter, false);
+	}
 
 	/*
 	 * Do not truncate the range, what action is taken in response to the
