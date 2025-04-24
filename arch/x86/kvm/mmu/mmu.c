@@ -4530,7 +4530,7 @@ static u8 kvm_max_level_for_fault_and_order(struct kvm_vcpu *vcpu,
 
 	if (fault->is_private) {
 		u8 level = kvm_x86_call(private_max_mapping_level)(
-			vcpu, fault->pfn, fault->gfn);
+			vcpu, fault->pfn, fault->gfn, fault->prefetch);
 
 		if (level)
 			max_level = min(max_level, level);
