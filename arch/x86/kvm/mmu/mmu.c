@@ -4494,7 +4494,7 @@ void kvm_arch_async_page_ready(struct kvm_vcpu *vcpu, struct kvm_async_pf *work)
 		vcpu->stat.pf_fixed++;
 }
 
-static u8 kvm_max_level_for_fault_and_order(struct kvm *kvm,
+static u8 kvm_max_level_for_fault_and_order(struct kvm_vcpu *vcpu,
 					    struct kvm_page_fault *fault,
 					    int order)
 {
@@ -4508,7 +4508,8 @@ static u8 kvm_max_level_for_fault_and_order(struct kvm *kvm,
 		return PG_LEVEL_4K;
 
 	if (fault->is_private) {
-		u8 level = kvm_x86_call(private_max_mapping_level)(kvm, fault->pfn);
+		u8 level = kvm_x86_call(private_max_mapping_level)(
+			vcpu, fault->pfn, fault->gfn);
 
 		if (level)
 			max_level = min(max_level, level);
@@ -4542,7 +4543,7 @@ static int kvm_mmu_faultin_pfn_gmem(struct kvm_vcpu *vcpu,
 	}
 
 	fault->map_writable = !(fault->slot->flags & KVM_MEM_READONLY);
-	fault->max_level = kvm_max_level_for_fault_and_order(vcpu->kvm, fault, gmem_order);
+	fault->max_level = kvm_max_level_for_fault_and_order(vcpu, fault, gmem_order);
 
 	return RET_PF_CONTINUE;
 }
