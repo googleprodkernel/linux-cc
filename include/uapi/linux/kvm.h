@@ -964,6 +964,7 @@ struct kvm_enable_cap {
 #define KVM_CAP_ARM_CACHEABLE_PFNMAP_SUPPORTED 243
 #define KVM_CAP_GUEST_MEMFD_FLAGS 244
 #define KVM_CAP_MEMORY_ATTRIBUTES2 245
+#define KVM_CAP_GUEST_MEMFD_MEMORY_ATTRIBUTES 246
 
 struct kvm_irq_routing_irqchip {
 	__u32 irqchip;
@@ -1622,11 +1623,15 @@ struct kvm_pre_fault_memory {
 #define KVM_SET_MEMORY_ATTRIBUTES2              _IOWR(KVMIO,  0xd6, struct kvm_memory_attributes2)
 
 struct kvm_memory_attributes2 {
-	__u64 address;
+	union {
+		__u64 address;
+		__u64 offset;
+	};
 	__u64 size;
 	__u64 attributes;
 	__u64 flags;
-	__u64 reserved[4];
+	__u64 error_offset;
+	__u64 reserved[3];
 };
 
 #endif /* __LINUX_KVM_H */
