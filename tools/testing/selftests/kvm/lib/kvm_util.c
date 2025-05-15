@@ -974,6 +974,108 @@ void vm_set_user_memory_region2(struct kvm_vm *vm, uint32_t slot, uint32_t flags
 		    errno, strerror(errno));
 }
 
+static struct userspace_mem_region *vm_mem_region_alloc(struct kvm_vm *vm,
+								uint64_t guest_paddr,
+								uint32_t slot,
+								size_t npages,
+								uint32_t flags)
+{
+	struct userspace_mem_region *region;
+
+	TEST_REQUIRE_SET_USER_MEMORY_REGION2();
+
+	TEST_ASSERT(vm_adjust_num_guest_pages(vm->mode, npages) == npages,
+		    "Number of guest pages is not compatible with the host. "
+		    "Try npages=%d", vm_adjust_num_guest_pages(vm->mode, npages));
+
+	TEST_ASSERT((guest_paddr % vm->page_size) == 0, "Guest physical "
+		    "address not on a page boundary.\n"
+		    "  guest_paddr: 0x%lx vm->page_size: 0x%x",
+		    guest_paddr, vm->page_size);
+	TEST_ASSERT((((guest_paddr >> vm->page_shift) + npages) - 1)
+		    <= vm->max_gfn, "Physical range beyond maximum "
+		    "supported physical address,\n"
+		    "  guest_paddr: 0x%lx npages: 0x%lx\n"
+		    "  vm->max_gfn: 0x%lx vm->page_size: 0x%x",
+		    guest_paddr, npages, vm->max_gfn, vm->page_size);
+
+	/*
+	 * Confirm a mem region with an overlapping address doesn't
+	 * already exist.
+	 */
+	region = (struct userspace_mem_region *) userspace_mem_region_find(
+			vm, guest_paddr,
+			(guest_paddr + npages * vm->page_size) - 1);
+	if (region != NULL)
+		TEST_FAIL("overlapping userspace_mem_region already "
+			  "exists\n"
+			  "  requested guest_paddr: 0x%lx npages: 0x%lx "
+			  "page_size: 0x%x\n"
+			  "  existing guest_paddr: 0x%lx size: 0x%lx",
+			  guest_paddr, npages, vm->page_size,
+			  (uint64_t) region->region.guest_phys_addr,
+			  (uint64_t) region->region.memory_size);
+
+	/* Confirm no region with the requested slot already exists. */
+	hash_for_each_possible(vm->regions.slot_hash, region, slot_node,
+			       slot) {
+		if (region->region.slot != slot)
+			continue;
+
+		TEST_FAIL("A mem region with the requested slot "
+			  "already exists.\n"
+			  "  requested slot: %u paddr: 0x%lx npages: 0x%lx\n"
+			  "  existing slot: %u paddr: 0x%lx size: 0x%lx",
+			  slot, guest_paddr, npages,
+			  region->region.slot,
+			  (uint64_t) region->region.guest_phys_addr,
+			  (uint64_t) region->region.memory_size);
+	}
+
+	/* Allocate and initialize new mem region structure. */
+	region = calloc(1, sizeof(*region));
+	TEST_ASSERT(region != NULL, "Insufficient Memory");
+
+	region->unused_phy_pages = sparsebit_alloc();
+	if (vm_arch_has_protected_memory(vm))
+		region->protected_phy_pages = sparsebit_alloc();
+	sparsebit_set_num(region->unused_phy_pages,
+			  guest_paddr >> vm->page_shift, npages);
+	region->region.slot = slot;
+	region->region.flags = flags;
+	region->region.guest_phys_addr = guest_paddr;
+	region->region.memory_size = npages * vm->page_size;
+
+	region->mmap_start = NULL;
+	region->mmap_size = 0;
+	region->host_mem = NULL;
+	region->fd = -1;
+
+	return region;
+}
+
+static void userspace_mem_region_commit(struct kvm_vm *vm,
+					struct userspace_mem_region *region)
+{
+	int ret;
+
+	region->region.userspace_addr = (uintptr_t) region->host_mem;
+	ret = __vm_ioctl(vm, KVM_SET_USER_MEMORY_REGION2, &region->region);
+	TEST_ASSERT(ret == 0, "KVM_SET_USER_MEMORY_REGION2 IOCTL failed,\n"
+		    "  rc: %i errno: %i\n"
+		    "  slot: %u flags: 0x%x\n"
+		    "  guest_phys_addr: 0x%lx size: 0x%lx guest_memfd: %d",
+		    ret, errno, region->region.slot, region->region.flags,
+		    (uint64_t) region->region.guest_phys_addr,
+		    (uint64_t) region->region.memory_size,
+		    region->region.guest_memfd);
+
+	/* Add to quick lookup data structures */
+	vm_userspace_mem_region_gpa_insert(&vm->regions.gpa_tree, region);
+	vm_userspace_mem_region_hva_insert(&vm->regions.hva_tree, region);
+	hash_add(vm->regions.slot_hash, &region->slot_node,
+		 region->region.slot);
+}
 
 /* FIXME: This thing needs to be ripped apart and rewritten. */
 void vm_mem_add(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
@@ -986,59 +1088,8 @@ void vm_mem_add(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
 	size_t mem_size = npages * vm->page_size;
 	size_t alignment;
 
-	TEST_REQUIRE_SET_USER_MEMORY_REGION2();
-
-	TEST_ASSERT(vm_adjust_num_guest_pages(vm->mode, npages) == npages,
-		"Number of guest pages is not compatible with the host. "
-		"Try npages=%d", vm_adjust_num_guest_pages(vm->mode, npages));
-
-	TEST_ASSERT((guest_paddr % vm->page_size) == 0, "Guest physical "
-		"address not on a page boundary.\n"
-		"  guest_paddr: 0x%lx vm->page_size: 0x%x",
-		guest_paddr, vm->page_size);
-	TEST_ASSERT((((guest_paddr >> vm->page_shift) + npages) - 1)
-		<= vm->max_gfn, "Physical range beyond maximum "
-		"supported physical address,\n"
-		"  guest_paddr: 0x%lx npages: 0x%lx\n"
-		"  vm->max_gfn: 0x%lx vm->page_size: 0x%x",
-		guest_paddr, npages, vm->max_gfn, vm->page_size);
-
-	/*
-	 * Confirm a mem region with an overlapping address doesn't
-	 * already exist.
-	 */
-	region = (struct userspace_mem_region *) userspace_mem_region_find(
-		vm, guest_paddr, (guest_paddr + npages * vm->page_size) - 1);
-	if (region != NULL)
-		TEST_FAIL("overlapping userspace_mem_region already "
-			"exists\n"
-			"  requested guest_paddr: 0x%lx npages: 0x%lx "
-			"page_size: 0x%x\n"
-			"  existing guest_paddr: 0x%lx size: 0x%lx",
-			guest_paddr, npages, vm->page_size,
-			(uint64_t) region->region.guest_phys_addr,
-			(uint64_t) region->region.memory_size);
-
-	/* Confirm no region with the requested slot already exists. */
-	hash_for_each_possible(vm->regions.slot_hash, region, slot_node,
-			       slot) {
-		if (region->region.slot != slot)
-			continue;
-
-		TEST_FAIL("A mem region with the requested slot "
-			"already exists.\n"
-			"  requested slot: %u paddr: 0x%lx npages: 0x%lx\n"
-			"  existing slot: %u paddr: 0x%lx size: 0x%lx",
-			slot, guest_paddr, npages,
-			region->region.slot,
-			(uint64_t) region->region.guest_phys_addr,
-			(uint64_t) region->region.memory_size);
-	}
-
-	/* Allocate and initialize new mem region structure. */
-	region = calloc(1, sizeof(*region));
-	TEST_ASSERT(region != NULL, "Insufficient Memory");
-	region->mmap_size = mem_size;
+	region = vm_mem_region_alloc(vm, guest_paddr, slot, npages,
+					     flags);
 
 #ifdef __s390x__
 	/* On s390x, the host address must be aligned to 1M (due to PGSTEs) */
@@ -1057,6 +1108,8 @@ void vm_mem_add(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
 		alignment = max(backing_src_pagesz, alignment);
 
 	TEST_ASSERT_EQ(guest_paddr, align_up(guest_paddr, backing_src_pagesz));
+
+	region->mmap_size = mem_size;
 
 	/* Add enough memory to align up if necessary */
 	if (alignment > 1)
@@ -1117,29 +1170,7 @@ void vm_mem_add(struct kvm_vm *vm, enum vm_mem_backing_src_type src_type,
 		region->region.guest_memfd = -1;
 	}
 
-	region->unused_phy_pages = sparsebit_alloc();
-	if (vm_arch_has_protected_memory(vm))
-		region->protected_phy_pages = sparsebit_alloc();
-	sparsebit_set_num(region->unused_phy_pages,
-		guest_paddr >> vm->page_shift, npages);
-	region->region.slot = slot;
-	region->region.flags = flags;
-	region->region.guest_phys_addr = guest_paddr;
-	region->region.memory_size = npages * vm->page_size;
-	region->region.userspace_addr = (uintptr_t) region->host_mem;
-	ret = __vm_ioctl(vm, KVM_SET_USER_MEMORY_REGION2, &region->region);
-	TEST_ASSERT(ret == 0, "KVM_SET_USER_MEMORY_REGION2 IOCTL failed,\n"
-		"  rc: %i errno: %i\n"
-		"  slot: %u flags: 0x%x\n"
-		"  guest_phys_addr: 0x%lx size: 0x%lx guest_memfd: %d",
-		ret, errno, slot, flags,
-		guest_paddr, (uint64_t) region->region.memory_size,
-		region->region.guest_memfd);
-
-	/* Add to quick lookup data structures */
-	vm_userspace_mem_region_gpa_insert(&vm->regions.gpa_tree, region);
-	vm_userspace_mem_region_hva_insert(&vm->regions.hva_tree, region);
-	hash_add(vm->regions.slot_hash, &region->slot_node, slot);
+	userspace_mem_region_commit(vm, region);
 
 	/* If shared memory, create an alias. */
 	if (region->fd >= 0) {
