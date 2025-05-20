@@ -664,9 +664,6 @@ int tdx_vcpu_create(struct kvm_vcpu *vcpu)
 	struct kvm_tdx *kvm_tdx = to_kvm_tdx(vcpu->kvm);
 	struct vcpu_tdx *tdx = to_tdx(vcpu);
 
-	if (kvm_tdx->state != TD_STATE_INITIALIZED)
-		return -EIO;
-
 	/*
 	 * TDX module mandates APICv, which requires an in-kernel local APIC.
 	 * Disallow an in-kernel I/O APIC, because level-triggered interrupts
@@ -691,12 +688,6 @@ int tdx_vcpu_create(struct kvm_vcpu *vcpu)
 	vcpu->arch.l1_tsc_offset = vcpu->arch.tsc_offset;
 	vcpu->arch.tsc_scaling_ratio = kvm_tdx->tsc_multiplier;
 	vcpu->arch.l1_tsc_scaling_ratio = kvm_tdx->tsc_multiplier;
-
-	vcpu->arch.guest_state_protected =
-		!(to_kvm_tdx(vcpu->kvm)->attributes & TDX_TD_ATTR_DEBUG);
-
-	if ((kvm_tdx->xfam & XFEATURE_MASK_XTILE) == XFEATURE_MASK_XTILE)
-		vcpu->arch.xfd_no_write_intercept = true;
 
 	tdx->vt.pi_desc.nv = POSTED_INTR_VECTOR;
 	__pi_set_sn(&tdx->vt.pi_desc);
@@ -3003,8 +2994,9 @@ out:
 
 static int tdx_vcpu_init(struct kvm_vcpu *vcpu, struct kvm_tdx_cmd *cmd)
 {
-	u64 apic_base;
+	struct kvm_tdx *kvm_tdx = to_kvm_tdx(vcpu->kvm);
 	struct vcpu_tdx *tdx = to_tdx(vcpu);
+	u64 apic_base;
 	int ret;
 
 	if (cmd->flags)
@@ -3012,6 +3004,15 @@ static int tdx_vcpu_init(struct kvm_vcpu *vcpu, struct kvm_tdx_cmd *cmd)
 
 	if (tdx->state != VCPU_TD_STATE_UNINITIALIZED)
 		return -EINVAL;
+
+	if (kvm_tdx->state != TD_STATE_INITIALIZED)
+		return -EIO;
+
+	vcpu->arch.guest_state_protected = !(kvm_tdx->attributes &
+					     TDX_TD_ATTR_DEBUG);
+
+	if ((kvm_tdx->xfam & XFEATURE_MASK_XTILE) == XFEATURE_MASK_XTILE)
+		vcpu->arch.xfd_no_write_intercept = true;
 
 	/*
 	 * TDX requires X2APIC, userspace is responsible for configuring guest
