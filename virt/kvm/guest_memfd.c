@@ -264,14 +264,15 @@ static bool kvm_gmem_has_safe_refcount(struct address_space *mapping, pgoff_t st
 	return refcount_safe;
 }
 
-static void kvm_gmem_unmap_private(struct kvm_gmem *gmem, pgoff_t start,
-				   pgoff_t end)
+static int kvm_gmem_unmap_private(struct kvm_gmem *gmem, pgoff_t start,
+				  pgoff_t end)
 {
 	struct kvm_memory_slot *slot;
 	struct kvm *kvm = gmem->kvm;
 	unsigned long index;
 	bool locked = false;
 	bool flush = false;
+	int ret = 0;
 
 	xa_for_each_range(&gmem->bindings, index, slot, start, end - 1) {
 		pgoff_t pgoff = slot->gmem.pgoff;
@@ -290,14 +291,24 @@ static void kvm_gmem_unmap_private(struct kvm_gmem *gmem, pgoff_t start,
 			locked = true;
 		}
 
+		ret = kvm_split_boundary_leafs(kvm, &gfn_range);
+		if (ret < 0)
+			goto out;
+
+		flush |= ret;
+		ret = 0;
+
 		flush |= kvm_mmu_unmap_gfn_range(kvm, &gfn_range);
 	}
 
+out:
 	if (flush)
 		kvm_flush_remote_tlbs(kvm);
 
 	if (locked)
 		KVM_MMU_UNLOCK(kvm);
+
+	return ret;
 }
 
 static void kvm_gmem_invalidate_begin(struct kvm_gmem *gmem, pgoff_t start,
@@ -468,8 +479,13 @@ static int kvm_gmem_convert_should_proceed(struct inode *inode,
 		work_end = work->start + work->nr_pages;
 
 		gmem_list = &inode->i_mapping->i_private_list;
-		list_for_each_entry(gmem, gmem_list, entry)
-			kvm_gmem_unmap_private(gmem, work->start, work_end);
+		list_for_each_entry(gmem, gmem_list, entry) {
+			int ret;
+
+			ret = kvm_gmem_unmap_private(gmem, work->start, work_end);
+			if (ret)
+				return ret;
+		}
 	} else {
 		unmap_mapping_pages(inode->i_mapping, work->start,
 				    work->nr_pages, false);
