@@ -1961,26 +1961,15 @@ int sev_vm_move_enc_context_from(struct kvm *kvm, struct kvm *source_kvm)
 		charged = true;
 	}
 
-	ret = kvm_lock_all_vcpus(kvm);
-	if (ret)
-		goto out_dst_cgroup;
-	ret = kvm_lock_all_vcpus(source_kvm);
-	if (ret)
-		goto out_dst_vcpu;
-
 	ret = sev_check_source_vcpus(kvm, source_kvm);
 	if (ret)
-		goto out_source_vcpu;
+		goto out_dst_cgroup;
 
 	sev_migrate_from(kvm, source_kvm);
 	kvm_vm_dead(source_kvm);
 	cg_cleanup_sev = src_sev;
 	ret = 0;
 
-out_source_vcpu:
-	kvm_unlock_all_vcpus(source_kvm);
-out_dst_vcpu:
-	kvm_unlock_all_vcpus(kvm);
 out_dst_cgroup:
 	/* Operates on the source on success, on the destination on failure.  */
 	if (charged)

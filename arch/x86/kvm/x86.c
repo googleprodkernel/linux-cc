@@ -6743,9 +6743,17 @@ static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
 	if (r)
 		goto out_mark_migration_done;
 
-	r = kvm_lock_vm_memslots(kvm, source_kvm);
+	r = kvm_lock_all_vcpus(kvm);
 	if (r)
 		goto out_unlock;
+
+	r = kvm_lock_all_vcpus(source_kvm);
+	if (r)
+		goto out_unlock_vcpus;
+
+	r = kvm_lock_vm_memslots(kvm, source_kvm);
+	if (r)
+		goto out_unlock_source_vcpus;
 
 	r = kvm_move_memory_ctxt_from(kvm, source_kvm);
 	if (r)
@@ -6762,6 +6770,10 @@ static int kvm_vm_move_enc_context_from(struct kvm *kvm, unsigned int source_fd)
 
 out_unlock_memslots:
 	kvm_unlock_vm_memslots(kvm, source_kvm);
+out_unlock_source_vcpus:
+	kvm_unlock_all_vcpus(source_kvm);
+out_unlock_vcpus:
+	kvm_unlock_all_vcpus(kvm);
 out_unlock:
 	kvm_unlock_two_vms(kvm, source_kvm);
 out_mark_migration_done:
