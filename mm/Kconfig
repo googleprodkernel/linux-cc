@@ -1381,6 +1381,10 @@ config PT_RECLAIM
 
 	  Note: now only empty user PTE page table pages will be reclaimed.
 
+config HUGETLB_RESTRUCTURING
+	bool
+	default n
+	depends on HUGETLB_PAGE
 
 source "mm/damon/Kconfig"
 
