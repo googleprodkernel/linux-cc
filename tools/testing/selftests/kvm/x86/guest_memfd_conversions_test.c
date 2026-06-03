@@ -2,6 +2,8 @@
 /*
  * Copyright (c) 2024, Google LLC.
  */
+#include <pthread.h>
+#include <time.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -326,39 +328,72 @@ GMEM_CONVERSION_TEST_INIT_SHARED(truncate)
 /* Test that shared/private memory protections work and are seen from any process. */
 GMEM_CONVERSION_TEST_INIT_SHARED(forked_accesses)
 {
-	/*
-	 * No races are intended in this test, shared memory is only used to
-	 * coordinate between processes.
-	 */
-	static enum {
+	enum test_state {
 		STATE_INIT,
 		STATE_CHECK_SHARED,
 		STATE_DONE_CHECKING_SHARED,
 		STATE_CHECK_PRIVATE,
 		STATE_DONE_CHECKING_PRIVATE,
-	} *test_state;
-	pid_t child_pid;
+	};
 
-	test_state = kvm_mmap(sizeof(*test_state), PROT_READ | PROT_WRITE,
-			      MAP_SHARED | MAP_ANONYMOUS, -1);
+	struct sync_state {
+		pthread_mutex_t mutex;
+		pthread_cond_t cond;
+		enum test_state step;
+	} *sync;
 
-#define TEST_STATE_AWAIT(__state)						\
-	while (READ_ONCE(*test_state) != __state) {				\
-		if (child_pid != 0) {						\
-			int status;						\
-			pid_t pid;						\
-			do {							\
-				pid = waitpid(child_pid, &status, WNOHANG);	\
-			} while (pid == -1 && errno == EINTR);			\
-			if (pid == -1)						\
-				TEST_FAIL("Couldn't check child status.");	\
-			else if (pid != 0)					\
-				TEST_FAIL("Child exited prematurely.");		\
+	pthread_mutexattr_t mattr;
+	pthread_condattr_t cattr;
+	pid_t child_pid, parent_pid;
+	int status;
+
+	sync = kvm_mmap(sizeof(*sync), PROT_READ | PROT_WRITE,
+			MAP_SHARED | MAP_ANONYMOUS, -1);
+
+	pthread_mutexattr_init(&mattr);
+	pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+	pthread_mutex_init(&sync->mutex, &mattr);
+	pthread_mutexattr_destroy(&mattr);
+
+	pthread_condattr_init(&cattr);
+	pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+	pthread_cond_init(&sync->cond, &cattr);
+	pthread_condattr_destroy(&cattr);
+
+	sync->step = STATE_INIT;
+
+#define TEST_STATE_AWAIT(__state)                 				\
+	do {                                      				\
+		pthread_mutex_lock(&sync->mutex); 				\
+		while (sync->step != (__state)) { 				\
+			struct timespec ts, stop;				\
+			int ret;						\
+										\
+			clock_gettime(CLOCK_REALTIME, &ts);			\
+			stop = timespec_add_ns(ts, 100 * 1000000UL); 		\
+										\
+			ret = pthread_cond_timedwait(&sync->cond, &sync->mutex, &stop); \
+			if (ret == ETIMEDOUT) {					\
+				bool alive = (child_pid == 0) ?			\
+					     (getppid() == parent_pid) :		\
+					     (waitpid(child_pid, NULL, WNOHANG) == 0); \
+				TEST_ASSERT(alive, "Other process exited prematurely"); \
+			} else {						\
+				TEST_ASSERT(!ret, "pthread_cond_timedwait failed"); \
+			}							\
 		}								\
-	}
+		pthread_mutex_unlock(&sync->mutex);				\
+	} while (0)
 
-#define TEST_STATE_SET(__state) WRITE_ONCE(*test_state, __state)
+#define TEST_STATE_SET(__state)							\
+	do {									\
+		pthread_mutex_lock(&sync->mutex);				\
+		sync->step = (__state);						\
+		pthread_cond_broadcast(&sync->cond);				\
+		pthread_mutex_unlock(&sync->mutex);				\
+	} while (0)
 
+	parent_pid = getpid();
 	child_pid = fork();
 	TEST_ASSERT(child_pid != -1, "fork failed");
 
@@ -394,7 +429,16 @@ GMEM_CONVERSION_TEST_INIT_SHARED(forked_accesses)
 	TEST_STATE_SET(STATE_CHECK_PRIVATE);
 	TEST_STATE_AWAIT(STATE_DONE_CHECKING_PRIVATE);
 
-	kvm_munmap(test_state, sizeof(*test_state));
+	TEST_ASSERT_EQ(waitpid(child_pid, &status, 0), child_pid);
+	TEST_ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		    "Child exited with unexpected status");
+
+	pthread_mutex_destroy(&sync->mutex);
+	pthread_cond_destroy(&sync->cond);
+	kvm_munmap(sync, sizeof(*sync));
+
+#undef TEST_STATE_SET
+#undef TEST_STATE_AWAIT
 }
 
 static int pin_pipe[2] = { -1, -1 };
