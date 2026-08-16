@@ -9,6 +9,7 @@
 #include <linux/pseudo_fs.h>
 #include <linux/pagemap.h>
 #include <linux/swap.h>
+#include <asm/msr.h>
 
 #include "kvm_mm.h"
 #include "guest_memfd.h"
@@ -638,6 +639,7 @@ static int __kvm_gmem_set_attributes(struct inode *inode, pgoff_t start,
 	pgoff_t end = start + nr_pages;
 	struct maple_tree *mt;
 	struct ma_state mas;
+	u64 t_total_start = 0, t_make_shared = 0;
 	int r = 0;
 
 	mt = &gi->attributes;
@@ -646,6 +648,9 @@ static int __kvm_gmem_set_attributes(struct inode *inode, pgoff_t start,
 
 	if (kvm_gmem_range_has_attributes(inode, start, nr_pages, attrs))
 		goto out;
+
+	if (!to_private)
+		t_total_start = rdtsc();
 
 	mas_init(&mas, mt, start);
 	r = kvm_gmem_mas_preallocate(&mas, attrs, start, nr_pages);
@@ -673,12 +678,23 @@ static int __kvm_gmem_set_attributes(struct inode *inode, pgoff_t start,
 	filter = to_private ? KVM_FILTER_SHARED : KVM_FILTER_PRIVATE;
 	kvm_gmem_invalidate_start(inode, start, end, filter);
 
-	if (!to_private)
+	if (!to_private) {
+		u64 t_ms_start = rdtsc();
+
 		kvm_gmem_make_shared(inode, start, end);
+		t_make_shared = rdtsc() - t_ms_start;
+	}
 
 	mas_store_prealloc(&mas, xa_mk_value(attrs));
 
 	kvm_gmem_invalidate_end(inode, start, end);
+
+	if (!to_private) {
+		u64 t_total = rdtsc() - t_total_start;
+
+		pr_err("guest_memfd to_shared: nr_pages=%lu, make_shared=%llu cycles, total=%llu cycles\n",
+			nr_pages, t_make_shared, t_total);
+	}
 out:
 	filemap_invalidate_unlock(mapping);
 	return r;
