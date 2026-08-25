@@ -67,47 +67,45 @@ fi
 
 kvm_has_gmem_attributes=$("$kvm_has_gmem_attributes_tool" | tail -n1)
 
-if [ "$kvm_has_gmem_attributes" -ne 1 ]; then
-	hugepage_2mb_count=$(get_hugepage_count 2048)
-	hugepage_2mb_enabled=$((hugepage_2mb_count >= REQUIRED_NUM_2M_HUGEPAGES))
-	hugepage_1gb_count=$(get_hugepage_count 1048576)
-	hugepage_1gb_enabled=$((hugepage_1gb_count >= REQUIRED_NUM_1G_HUGEPAGES))
+hugepage_2mb_count=$(get_hugepage_count 2048)
+hugepage_2mb_enabled=$((hugepage_2mb_count >= REQUIRED_NUM_2M_HUGEPAGES))
+hugepage_1gb_count=$(get_hugepage_count 1048576)
+hugepage_1gb_enabled=$((hugepage_1gb_count >= REQUIRED_NUM_1G_HUGEPAGES))
 
-	default_hugepage_size_kb=$(get_default_hugepage_size_in_kb)
-	hugepage_default_enabled=0
-	if [ "$default_hugepage_size_kb" -eq 2048 ]; then
-		hugepage_default_enabled=$hugepage_2mb_enabled
-	elif [ "$default_hugepage_size_kb" -eq 1048576 ]; then
-		hugepage_default_enabled=$hugepage_1gb_enabled
-	fi
+default_hugepage_size_kb=$(get_default_hugepage_size_in_kb)
+hugepage_default_enabled=0
+if [ "$default_hugepage_size_kb" -eq 2048 ]; then
+	hugepage_default_enabled=$hugepage_2mb_enabled
+elif [ "$default_hugepage_size_kb" -eq 1048576 ]; then
+	hugepage_default_enabled=$hugepage_1gb_enabled
+fi
 
-	backing_src_types=("anonymous" "anonymous_thp")
+backing_src_types=("anonymous" "anonymous_thp")
 
-	if [ "$hugepage_default_enabled" -eq 1 ]; then
-		backing_src_types+=("anonymous_hugetlb")
-	else
-		echo "skipping anonymous_hugetlb backing source type"
-	fi
+if [ "$hugepage_default_enabled" -eq 1 ]; then
+	backing_src_types+=("anonymous_hugetlb")
+else
+	echo "skipping anonymous_hugetlb backing source type"
+fi
 
-	if [ "$hugepage_2mb_enabled" -eq 1 ]; then
-		backing_src_types+=("anonymous_hugetlb_2mb")
-	else
-		echo "skipping anonymous_hugetlb_2mb backing source type"
-	fi
+if [ "$hugepage_2mb_enabled" -eq 1 ]; then
+	backing_src_types+=("anonymous_hugetlb_2mb")
+else
+	echo "skipping anonymous_hugetlb_2mb backing source type"
+fi
 
-	if [ "$hugepage_1gb_enabled" -eq 1 ]; then
-		backing_src_types+=("anonymous_hugetlb_1gb")
-	else
-		echo "skipping anonymous_hugetlb_1gb backing source type"
-	fi
+if [ "$hugepage_1gb_enabled" -eq 1 ]; then
+	backing_src_types+=("anonymous_hugetlb_1gb")
+else
+	echo "skipping anonymous_hugetlb_1gb backing source type"
+fi
 
-	backing_src_types+=("shmem")
+backing_src_types+=("shmem")
 
-	if [ "$hugepage_default_enabled" -eq 1 ]; then
-		backing_src_types+=("shared_hugetlb")
-	else
-		echo "skipping shared_hugetlb backing source type"
-	fi
+if [ "$hugepage_default_enabled" -eq 1 ]; then
+	backing_src_types+=("shared_hugetlb")
+else
+	echo "skipping shared_hugetlb backing source type"
 fi
 
 run_test_config() {
@@ -151,7 +149,25 @@ run_test_config() {
 return_code=0
 if [ "$kvm_has_gmem_attributes" -eq 1 ]; then
 	run_test_config ""
-	return_code=$?
+	res=$?
+	if [ $res -ne 0 ]; then
+		return_code=$res
+	fi
+
+	if [ $res -eq 0 ] || [ $res -eq $KSFT_SKIP ]; then
+		for src_type in "${backing_src_types[@]}"; do
+			echo
+
+			run_test_config "$src_type" "-2"
+			res=$?
+			if [ $res -ne 0 ]; then
+				return_code=$res
+				if [ $res -ne $KSFT_SKIP ]; then
+					break
+				fi
+			fi
+		done
+	fi
 else
 	first=1
 	for src_type in "${backing_src_types[@]}"; do
