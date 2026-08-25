@@ -26,6 +26,8 @@
 #define BASE_DATA_GPA		((u64)(1ull << 32))
 #define PER_CPU_DATA_SIZE	((u64)(SZ_2M + PAGE_SIZE))
 
+static bool use_double_backing;
+
 /* Horrific macro so that the line info is captured accurately :-( */
 #define memcmp_g(gpa, pattern,  size)								\
 do {												\
@@ -355,8 +357,15 @@ static void *__test_mem_conversions(void *__vcpu)
 				size_t nr_bytes = min_t(size_t, vm->page_size, size - i);
 				u8 *hva = addr_gpa2hva(vm, gpa + i);
 
-				/* In all cases, the host should observe the shared data. */
-				memcmp_h(hva, gpa + i, uc.args[3], nr_bytes);
+				/*
+				 * When using double backing, the host should
+				 * always observe shared data, since the shared
+				 * memory is a separate page.
+				 */
+				if (use_double_backing)
+					memcmp_h(hva, gpa + i, uc.args[3], nr_bytes);
+				else if (uc.args[0] == SYNC_PRIVATE)
+					TEST_EXPECT_SIGBUS(READ_ONCE(*hva));
 
 				/* For shared, write the new pattern to guest memory. */
 				if (uc.args[0] == SYNC_SHARED)
@@ -372,15 +381,23 @@ static void *__test_mem_conversions(void *__vcpu)
 	}
 }
 
+/* Align each vCPU's chunk of memory naturally to the size of the backing store. */
+static size_t compute_per_cpu_size(enum vm_mem_backing_src_type src_type)
+{
+	size_t alignment;
+
+	if (use_double_backing)
+		alignment = get_backing_src_pagesz(src_type);
+	else
+		alignment = getpagesize();
+
+	return align_up(PER_CPU_DATA_SIZE, max_t(size_t, SZ_2M, alignment));
+}
+
 static void test_mem_conversions(enum vm_mem_backing_src_type src_type, u32 nr_vcpus,
 				 u32 nr_memslots)
 {
-	/*
-	 * Allocate enough memory so that each vCPU's chunk of memory can be
-	 * naturally aligned with respect to the size of the backing store.
-	 */
-	const size_t alignment = max_t(size_t, SZ_2M, get_backing_src_pagesz(src_type));
-	const size_t per_cpu_size = align_up(PER_CPU_DATA_SIZE, alignment);
+	const size_t per_cpu_size = compute_per_cpu_size(src_type);
 	const size_t memfd_size = per_cpu_size * nr_vcpus;
 	const size_t slot_size = memfd_size / nr_memslots;
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
@@ -404,6 +421,8 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type, u32 nr_v
 	gmem_flags = 0;
 	if (kvm_has_gmem_attributes)
 		gmem_flags |= GUEST_MEMFD_FLAG_INIT_SHARED;
+	if (!use_double_backing)
+		gmem_flags |= GUEST_MEMFD_FLAG_MMAP;
 
 	memfd = vm_create_guest_memfd(vm, memfd_size, gmem_flags);
 
@@ -448,7 +467,9 @@ static void test_mem_conversions(enum vm_mem_backing_src_type src_type, u32 nr_v
 static void usage(const char *cmd)
 {
 	puts("");
-	printf("usage: %s [-h] [-m nr_memslots] [-s mem_type] [-n nr_vcpus]\n", cmd);
+	printf("usage: %s [-2] [-h] [-m nr_memslots] [-s mem_type] [-n nr_vcpus]\n", cmd);
+	puts("");
+	puts(" -2: use double backing (guest_memfd for private, src_type for shared)");
 	puts("");
 	backing_src_help("-s");
 	puts("");
@@ -461,16 +482,22 @@ static void usage(const char *cmd)
 int main(int argc, char *argv[])
 {
 	enum vm_mem_backing_src_type src_type = DEFAULT_VM_MEM_SRC;
+	const char *backing_src_str = NULL;
 	u32 nr_memslots = 1;
 	u32 nr_vcpus = 1;
 	int opt;
 
 	TEST_REQUIRE(kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM));
 
-	while ((opt = getopt(argc, argv, "hm:s:n:")) != -1) {
+	use_double_backing = !kvm_has_gmem_attributes;
+
+	while ((opt = getopt(argc, argv, "2hm:s:n:")) != -1) {
 		switch (opt) {
+		case '2':
+			use_double_backing = true;
+			break;
 		case 's':
-			src_type = parse_backing_src_type(optarg);
+			backing_src_str = optarg;
 			break;
 		case 'n':
 			nr_vcpus = atoi_positive("nr_vcpus", optarg);
@@ -483,6 +510,12 @@ int main(int argc, char *argv[])
 			usage(argv[0]);
 			exit(0);
 		}
+	}
+
+	if (backing_src_str) {
+		TEST_ASSERT(use_double_backing,
+			    "src_type is only configurable when testing using double backing.");
+		src_type = parse_backing_src_type(backing_src_str);
 	}
 
 	test_mem_conversions(src_type, nr_vcpus, nr_memslots);
